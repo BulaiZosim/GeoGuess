@@ -2,6 +2,10 @@ const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous char
 const CODE_LENGTH = 6;
 const MAX_PLAYERS = 24;
 
+function avatarUrl(name) {
+  return `https://api.dicebear.com/9.x/adventurer/svg?seed=${encodeURIComponent(name)}`;
+}
+
 class RoomManager {
   constructor() {
     this.rooms = new Map();
@@ -18,24 +22,29 @@ class RoomManager {
     return code;
   }
 
-  createRoom(hostId, hostName) {
+  createRoom(hostSocketId, playerName, persistentPlayerId) {
     const code = this.generateCode();
     const room = {
       code,
-      hostId,
+      hostId: hostSocketId,
       players: new Map(),
-      state: 'lobby', // lobby | playing | round_results | game_over
+      state: 'lobby',
       currentRound: 0,
       totalRounds: 3,
-      roundTime: 90, // seconds
+      roundTime: 90,
       usedLocations: [],
       currentLocation: null,
       guesses: new Map(),
       scores: new Map(),
       roundTimer: null,
     };
-    room.players.set(hostId, { id: hostId, name: hostName, connected: true });
-    room.scores.set(hostId, 0);
+    room.players.set(hostSocketId, {
+      id: hostSocketId,
+      name: playerName,
+      playerId: persistentPlayerId,
+      connected: true,
+    });
+    room.scores.set(hostSocketId, 0);
     this.rooms.set(code, room);
     return room;
   }
@@ -44,38 +53,43 @@ class RoomManager {
     return this.rooms.get(code?.toUpperCase());
   }
 
-  joinRoom(code, playerId, playerName) {
+  joinRoom(code, socketId, playerName, persistentPlayerId) {
     const room = this.getRoom(code);
     if (!room) return { error: 'Room not found' };
     if (room.state !== 'lobby') return { error: 'Game already in progress' };
     if (room.players.size >= MAX_PLAYERS) return { error: 'Room is full (max 24 players)' };
 
-    const existingNames = [...room.players.values()].map(p => p.name.toLowerCase());
-    if (existingNames.includes(playerName.toLowerCase())) {
-      return { error: 'Name already taken in this room' };
+    // Check if this persistent player is already in the room
+    for (const p of room.players.values()) {
+      if (p.playerId === persistentPlayerId) {
+        return { error: 'You are already in this room' };
+      }
     }
 
-    room.players.set(playerId, { id: playerId, name: playerName, connected: true });
-    room.scores.set(playerId, 0);
+    room.players.set(socketId, {
+      id: socketId,
+      name: playerName,
+      playerId: persistentPlayerId,
+      connected: true,
+    });
+    room.scores.set(socketId, 0);
     return { room };
   }
 
-  removePlayer(playerId) {
+  removePlayer(socketId) {
     for (const [code, room] of this.rooms) {
-      if (room.players.has(playerId)) {
-        room.players.delete(playerId);
-        room.scores.delete(playerId);
-        room.guesses.delete(playerId);
+      if (room.players.has(socketId)) {
+        room.players.delete(socketId);
+        room.scores.delete(socketId);
+        room.guesses.delete(socketId);
 
-        // If room is empty, clean up
         if (room.players.size === 0) {
           if (room.roundTimer) clearTimeout(room.roundTimer);
           this.rooms.delete(code);
-          return { room, wasHost: room.hostId === playerId, roomDeleted: true };
+          return { room, wasHost: room.hostId === socketId, roomDeleted: true };
         }
 
-        // If host left, assign new host
-        if (room.hostId === playerId) {
+        if (room.hostId === socketId) {
           room.hostId = room.players.keys().next().value;
           return { room, wasHost: true, newHostId: room.hostId, roomDeleted: false };
         }
@@ -86,9 +100,9 @@ class RoomManager {
     return null;
   }
 
-  getRoomByPlayer(playerId) {
+  getRoomByPlayer(socketId) {
     for (const room of this.rooms.values()) {
-      if (room.players.has(playerId)) return room;
+      if (room.players.has(socketId)) return room;
     }
     return null;
   }
@@ -96,7 +110,9 @@ class RoomManager {
   getPlayerList(room) {
     return [...room.players.values()].map(p => ({
       id: p.id,
+      playerId: p.playerId,
       name: p.name,
+      avatarUrl: avatarUrl(p.name),
       isHost: p.id === room.hostId,
       score: room.scores.get(p.id) || 0,
     }));

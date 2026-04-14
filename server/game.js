@@ -13,18 +13,19 @@ function haversine(lat1, lon1, lat2, lon2) {
 }
 
 function calculateScore(distanceKm) {
-  // 5000 points at 0 km, decays exponentially
   return Math.round(5000 * Math.exp(-distanceKm / 2000));
 }
 
-function handleSocket(io, socket, rooms) {
+function handleSocket(io, socket, rooms, db) {
   console.log(`Connected: ${socket.id}`);
 
-  socket.on('create_room', ({ playerName }, callback) => {
-    const name = (playerName || '').trim().slice(0, 20);
-    if (!name) return callback({ error: 'Name is required' });
+  socket.on('create_room', ({ playerId }, callback) => {
+    if (!playerId) return callback({ error: 'Select a player' });
 
-    const room = rooms.createRoom(socket.id, name);
+    const player = db.getPlayerById(playerId);
+    if (!player) return callback({ error: 'Player not found' });
+
+    const room = rooms.createRoom(socket.id, player.name, player.id);
     socket.join(room.code);
     callback({
       code: room.code,
@@ -33,12 +34,14 @@ function handleSocket(io, socket, rooms) {
     });
   });
 
-  socket.on('join_room', ({ code, playerName }, callback) => {
-    const name = (playerName || '').trim().slice(0, 20);
-    if (!name) return callback({ error: 'Name is required' });
+  socket.on('join_room', ({ code, playerId }, callback) => {
+    if (!playerId) return callback({ error: 'Select a player' });
     if (!code) return callback({ error: 'Room code is required' });
 
-    const result = rooms.joinRoom(code, socket.id, name);
+    const player = db.getPlayerById(playerId);
+    if (!player) return callback({ error: 'Player not found' });
+
+    const result = rooms.joinRoom(code, socket.id, player.name, player.id);
     if (result.error) return callback({ error: result.error });
 
     const room = result.room;
@@ -72,7 +75,6 @@ function handleSocket(io, socket, rooms) {
     callback?.({ ok: true });
   });
 
-  // Host's client found a valid panorama — now broadcast to all players
   socket.on('location_found', ({ lat, lng, panoId }) => {
     const room = rooms.getRoomByPlayer(socket.id);
     if (!room || room.hostId !== socket.id) return;
@@ -81,7 +83,6 @@ function handleSocket(io, socket, rooms) {
     room.currentLocation = { lat, lng };
     room.state = 'playing';
 
-    // Broadcast the confirmed panorama to ALL players (including host)
     io.to(room.code).emit('round_start_confirmed', {
       round: room.currentRound,
       totalRounds: room.totalRounds,
@@ -91,7 +92,6 @@ function handleSocket(io, socket, rooms) {
       lng,
     });
 
-    // Start the timer now
     room.roundTimer = setTimeout(() => {
       endRound(io, room, rooms);
     }, room.roundTime * 1000);
@@ -123,7 +123,7 @@ function handleSocket(io, socket, rooms) {
     if (room.state !== 'round_results') return;
 
     if (room.currentRound >= room.totalRounds) {
-      endGame(io, room, rooms);
+      endGame(io, room, rooms, db);
     } else {
       startRound(io, room, rooms);
     }
@@ -167,19 +167,16 @@ function startRound(io, room, rooms) {
   room.guesses.clear();
   room.state = 'searching';
 
-  // Generate several random candidate points for the host to try
   const candidates = [];
   for (let i = 0; i < 20; i++) {
     candidates.push(generateRandomPoint());
   }
 
-  // Tell all players we're searching, but only the host does the actual Street View lookup
   io.to(room.code).emit('round_searching', {
     round: room.currentRound,
     totalRounds: room.totalRounds,
   });
 
-  // Send candidates only to the host
   const hostSocket = [...room.players.keys()].find(id => id === room.hostId);
   if (hostSocket) {
     io.to(hostSocket).emit('find_panorama', { candidates });
@@ -196,24 +193,26 @@ function endRound(io, room, rooms) {
   const actual = room.currentLocation;
   const results = [];
 
-  for (const [playerId, player] of room.players) {
-    const guess = room.guesses.get(playerId);
+  for (const [socketId, player] of room.players) {
+    const guess = room.guesses.get(socketId);
     let distance = null;
     let points = 0;
 
     if (guess) {
       distance = haversine(actual.lat, actual.lng, guess.lat, guess.lng);
       points = calculateScore(distance);
-      room.scores.set(playerId, (room.scores.get(playerId) || 0) + points);
+      room.scores.set(socketId, (room.scores.get(socketId) || 0) + points);
     }
 
     results.push({
-      id: playerId,
+      id: socketId,
+      playerId: player.playerId,
       name: player.name,
+      avatarUrl: `https://api.dicebear.com/9.x/adventurer/svg?seed=${encodeURIComponent(player.name)}`,
       guess: guess ? { lat: guess.lat, lng: guess.lng } : null,
       distance: distance !== null ? Math.round(distance) : null,
       points,
-      totalScore: room.scores.get(playerId) || 0,
+      totalScore: room.scores.get(socketId) || 0,
     });
   }
 
@@ -228,18 +227,33 @@ function endRound(io, room, rooms) {
   });
 }
 
-function endGame(io, room, rooms) {
+function endGame(io, room, rooms, db) {
   room.state = 'game_over';
 
   const standings = [];
-  for (const [playerId, player] of room.players) {
+  const playerScores = [];
+
+  for (const [socketId, player] of room.players) {
+    const score = room.scores.get(socketId) || 0;
     standings.push({
-      id: playerId,
+      id: socketId,
+      playerId: player.playerId,
       name: player.name,
-      totalScore: room.scores.get(playerId) || 0,
+      avatarUrl: `https://api.dicebear.com/9.x/adventurer/svg?seed=${encodeURIComponent(player.name)}`,
+      totalScore: score,
     });
+    playerScores.push({ playerId: player.playerId, score });
   }
+
   standings.sort((a, b) => b.totalScore - a.totalScore);
+
+  // Save to database
+  try {
+    db.saveGameResult(room.code, room.totalRounds, playerScores);
+    console.log(`Game saved: ${room.code}, ${playerScores.length} players`);
+  } catch (e) {
+    console.error('Failed to save game result:', e);
+  }
 
   io.to(room.code).emit('game_over', { standings });
 }

@@ -4,6 +4,8 @@ const state = {
   roomCode: null,
   isHost: false,
   myId: null,
+  selectedPlayerId: null,
+  selectedPlayerName: null,
   guessMarker: null,
   guessMap: null,
   resultsMap: null,
@@ -30,11 +32,45 @@ function loadGoogleMaps() {
 
 window.onGoogleMapsLoaded = function () {
   state.googleMapsReady = true;
-  console.log('Google Maps API loaded');
 };
 
-// Load immediately so it's ready when the game starts
 loadGoogleMaps();
+
+// ===== AVATAR GRID =====
+async function loadPlayerGrid() {
+  const grid = document.getElementById('avatar-grid');
+  try {
+    const players = await fetch('/api/players').then(r => r.json());
+
+    if (players.length === 0) {
+      grid.innerHTML = '<p class="empty-grid-msg">No players yet. Ask an admin to add players at <a href="/admin">/admin</a></p>';
+      return;
+    }
+
+    grid.innerHTML = players.map(p => `
+      <div class="avatar-card" data-player-id="${p.id}" data-player-name="${escapeHtml(p.name)}">
+        <img src="${p.avatarUrl}" class="avatar-img" alt="${escapeHtml(p.name)}" />
+        <span class="avatar-name">${escapeHtml(p.name)}</span>
+      </div>
+    `).join('');
+
+    grid.querySelectorAll('.avatar-card').forEach(card => {
+      card.addEventListener('click', () => {
+        grid.querySelectorAll('.avatar-card').forEach(c => c.classList.remove('selected'));
+        card.classList.add('selected');
+        state.selectedPlayerId = parseInt(card.dataset.playerId);
+        state.selectedPlayerName = card.dataset.playerName;
+
+        document.getElementById('btn-create').disabled = false;
+        document.getElementById('btn-join').disabled = false;
+      });
+    });
+  } catch (e) {
+    grid.innerHTML = '<p class="empty-grid-msg">Failed to load players</p>';
+  }
+}
+
+loadPlayerGrid();
 
 // ===== SOCKET SETUP =====
 function initSocket() {
@@ -58,7 +94,6 @@ function initSocket() {
     updateHostControls();
   });
 
-  // Server is searching for a location — show loading screen
   socket.on('round_searching', ({ round, totalRounds }) => {
     showScreen('game');
     document.getElementById('game-round').textContent = `Round ${round}/${totalRounds}`;
@@ -67,12 +102,10 @@ function initSocket() {
     document.getElementById('panorama').innerHTML = '<p style="color:#fff;text-align:center;padding-top:40%;">Searching for a Street View location...</p>';
   });
 
-  // Host only: server sends candidate points to try
   socket.on('find_panorama', ({ candidates }) => {
     findValidPanorama(candidates);
   });
 
-  // All players: confirmed panorama found, start playing
   socket.on('round_start_confirmed', (data) => {
     startGameRound(data);
   });
@@ -101,7 +134,6 @@ function initSocket() {
 // ===== PANORAMA SEARCH (host only) =====
 function findValidPanorama(candidates) {
   if (!state.googleMapsReady) {
-    // Wait for Google Maps to load, then retry
     setTimeout(() => findValidPanorama(candidates), 500);
     return;
   }
@@ -111,8 +143,7 @@ function findValidPanorama(candidates) {
 
   function tryNext() {
     if (index >= candidates.length) {
-      // All candidates failed — ask server for more (shouldn't happen often)
-      console.warn('All candidates failed, this should be rare');
+      console.warn('All candidates failed');
       return;
     }
 
@@ -126,7 +157,6 @@ function findValidPanorama(candidates) {
       source: google.maps.StreetViewSource.OUTDOOR,
     }, (data, status) => {
       if (status === google.maps.StreetViewStatus.OK) {
-        // Found one! Tell the server the actual panorama location
         const actualLat = data.location.latLng.lat();
         const actualLng = data.location.latLng.lng();
         state.socket.emit('location_found', {
@@ -145,12 +175,11 @@ function findValidPanorama(candidates) {
 
 // ===== LANDING =====
 document.getElementById('btn-create').addEventListener('click', () => {
-  const name = document.getElementById('input-name').value.trim();
-  if (!name) return showError('Enter a display name');
+  if (!state.selectedPlayerId) return showError('Select your player first');
 
   if (!state.socket) initSocket();
 
-  state.socket.emit('create_room', { playerName: name }, (res) => {
+  state.socket.emit('create_room', { playerId: state.selectedPlayerId }, (res) => {
     if (res.error) return showError(res.error);
     state.roomCode = res.code;
     state.isHost = true;
@@ -159,14 +188,13 @@ document.getElementById('btn-create').addEventListener('click', () => {
 });
 
 document.getElementById('btn-join').addEventListener('click', () => {
-  const name = document.getElementById('input-name').value.trim();
+  if (!state.selectedPlayerId) return showError('Select your player first');
   const code = document.getElementById('input-code').value.trim().toUpperCase();
-  if (!name) return showError('Enter a display name');
   if (!code) return showError('Enter a room code');
 
   if (!state.socket) initSocket();
 
-  state.socket.emit('join_room', { code, playerName: name }, (res) => {
+  state.socket.emit('join_room', { code, playerId: state.selectedPlayerId }, (res) => {
     if (res.error) return showError(res.error);
     state.roomCode = res.code;
     state.isHost = false;
@@ -174,19 +202,8 @@ document.getElementById('btn-join').addEventListener('click', () => {
   });
 });
 
-// Allow Enter key
 document.getElementById('input-code').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') document.getElementById('btn-join').click();
-});
-document.getElementById('input-name').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    const code = document.getElementById('input-code').value.trim();
-    if (code) {
-      document.getElementById('btn-join').click();
-    } else {
-      document.getElementById('btn-create').click();
-    }
-  }
 });
 
 function showError(msg) {
@@ -207,6 +224,7 @@ function renderLobbyPlayers(players) {
   const el = document.getElementById('lobby-players');
   el.innerHTML = players.map(p => `
     <div class="player-card ${p.isHost ? 'host' : ''}">
+      <img src="${p.avatarUrl}" class="player-avatar" alt="${escapeHtml(p.name)}" />
       <span class="player-name">${escapeHtml(p.name)}</span>
       ${p.isHost ? '<span class="host-badge">HOST</span>' : ''}
     </div>
@@ -230,14 +248,12 @@ function startGameRound({ round, totalRounds, timeLimit, panoId }) {
   document.getElementById('game-round').textContent = `Round ${round}/${totalRounds}`;
   document.getElementById('game-guessed').textContent = `0/? guessed`;
 
-  // Reset guess state
   state.guessMarker = null;
   const submitBtn = document.getElementById('btn-submit-guess');
   submitBtn.disabled = true;
   submitBtn.textContent = 'Place your guess on the map';
   submitBtn.classList.remove('submitted');
 
-  // Timer
   let timeLeft = timeLimit;
   const timerEl = document.getElementById('game-timer');
   timerEl.textContent = timeLeft;
@@ -250,10 +266,7 @@ function startGameRound({ round, totalRounds, timeLimit, panoId }) {
     if (timeLeft <= 0) clearInterval(state.timerInterval);
   }, 1000);
 
-  // Show the panorama using the confirmed panoId
   showPanorama(panoId);
-
-  // Initialize guess map
   initGuessMap();
 }
 
@@ -335,9 +348,8 @@ function showRoundResults({ round, totalRounds, actual, results, isLastRound }) 
   showScreen('results');
 
   document.getElementById('results-title').textContent = `Round ${round}/${totalRounds} Results`;
-  document.getElementById('results-country').textContent = ``;
+  document.getElementById('results-country').textContent = '';
 
-  // Results map
   const mapContainer = document.getElementById('results-map');
   mapContainer.innerHTML = '';
   const mapDiv = document.createElement('div');
@@ -351,14 +363,12 @@ function showRoundResults({ round, totalRounds, actual, results, isLastRound }) 
     maxZoom: 19,
   }).addTo(rMap);
 
-  // Actual location marker (green)
   const actualIcon = L.divIcon({ className: 'marker-actual', html: '<div class="marker-dot actual"></div>', iconSize: [16, 16], iconAnchor: [8, 8] });
   L.marker([actual.lat, actual.lng], { icon: actualIcon }).addTo(rMap)
     .bindPopup('Actual location');
 
   const bounds = L.latLngBounds([[actual.lat, actual.lng]]);
 
-  // Player guess markers + lines
   const colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22', '#e84393',
     '#00cec9', '#6c5ce7', '#fd79a8', '#ffeaa7', '#dfe6e9', '#636e72', '#d63031', '#0984e3',
     '#00b894', '#fdcb6e', '#b2bec3', '#2d3436', '#ff7675', '#74b9ff', '#55efc4', '#fab1a0'];
@@ -385,7 +395,6 @@ function showRoundResults({ round, totalRounds, actual, results, isLastRound }) 
     rMap.fitBounds(bounds, { padding: [40, 40] });
   }, 100);
 
-  // Results table
   const table = document.getElementById('results-table');
   table.innerHTML = `
     <div class="results-header">
@@ -398,7 +407,10 @@ function showRoundResults({ round, totalRounds, actual, results, isLastRound }) 
     ${results.map((r, i) => `
       <div class="results-row ${r.id === state.myId ? 'is-me' : ''}">
         <span class="rr-rank">${i + 1}</span>
-        <span class="rr-name">${escapeHtml(r.name)}</span>
+        <span class="rr-name">
+          <img src="${r.avatarUrl}" class="player-avatar-sm" alt="" />
+          ${escapeHtml(r.name)}
+        </span>
         <span class="rr-dist">${r.distance !== null ? r.distance + ' km' : 'No guess'}</span>
         <span class="rr-pts">+${r.points}</span>
         <span class="rr-total">${r.totalScore}</span>
@@ -406,7 +418,6 @@ function showRoundResults({ round, totalRounds, actual, results, isLastRound }) 
     `).join('')}
   `;
 
-  // Host controls
   if (state.isHost) {
     const btn = document.getElementById('btn-next-round');
     btn.style.display = '';
@@ -426,10 +437,9 @@ document.getElementById('btn-next-round').addEventListener('click', () => {
 function showGameOver({ standings }) {
   showScreen('gameover');
 
-  // Podium (top 3)
   const podium = document.getElementById('gameover-podium');
   const top3 = standings.slice(0, 3);
-  const podiumOrder = [1, 0, 2]; // silver, gold, bronze visual order
+  const podiumOrder = [1, 0, 2];
   podium.innerHTML = podiumOrder.map(idx => {
     const p = top3[idx];
     if (!p) return '<div class="podium-slot empty"></div>';
@@ -438,6 +448,7 @@ function showGameOver({ standings }) {
     const medals = ['gold', 'silver', 'bronze'];
     return `
       <div class="podium-slot">
+        <img src="${p.avatarUrl}" class="podium-avatar" alt="${escapeHtml(p.name)}" />
         <div class="podium-name">${escapeHtml(p.name)}</div>
         <div class="podium-score">${p.totalScore} pts</div>
         <div class="podium-bar ${medals[idx]}" style="height:${heights[idx]}">
@@ -447,17 +458,16 @@ function showGameOver({ standings }) {
     `;
   }).join('');
 
-  // Full standings
   const el = document.getElementById('gameover-standings');
   el.innerHTML = standings.map((s, i) => `
     <div class="standing-row ${s.id === state.myId ? 'is-me' : ''}">
       <span class="sr-rank">${i + 1}</span>
+      <img src="${s.avatarUrl}" class="player-avatar-sm" alt="" />
       <span class="sr-name">${escapeHtml(s.name)}</span>
       <span class="sr-score">${s.totalScore} pts</span>
     </div>
   `).join('');
 
-  // Host controls
   if (state.isHost) {
     document.getElementById('btn-back-lobby').style.display = '';
     document.getElementById('gameover-waiting').style.display = 'none';
@@ -470,6 +480,52 @@ function showGameOver({ standings }) {
 document.getElementById('btn-back-lobby').addEventListener('click', () => {
   state.socket.emit('back_to_lobby');
 });
+
+// ===== LEADERBOARD =====
+document.getElementById('btn-leaderboard').addEventListener('click', () => {
+  showLeaderboard();
+});
+
+document.getElementById('btn-leaderboard-back').addEventListener('click', () => {
+  showScreen('landing');
+});
+
+async function showLeaderboard() {
+  showScreen('leaderboard');
+  const list = document.getElementById('leaderboard-list');
+  list.innerHTML = '<p style="text-align:center;color:#888;">Loading...</p>';
+
+  try {
+    const data = await fetch('/api/leaderboard').then(r => r.json());
+
+    if (data.length === 0 || data.every(d => d.gamesPlayed === 0)) {
+      list.innerHTML = '<p style="text-align:center;color:#888;">No games played yet!</p>';
+      return;
+    }
+
+    list.innerHTML = `
+      <div class="lb-header">
+        <span class="lb-rank">#</span>
+        <span class="lb-name">Player</span>
+        <span class="lb-games">Games</span>
+        <span class="lb-score">Total Score</span>
+      </div>
+      ${data.map((d, i) => `
+        <div class="lb-row ${i < 3 && d.gamesPlayed > 0 ? 'lb-top' + (i + 1) : ''}">
+          <span class="lb-rank">${i + 1}</span>
+          <span class="lb-name">
+            <img src="${d.avatarUrl}" class="player-avatar-sm" alt="" />
+            ${escapeHtml(d.name)}
+          </span>
+          <span class="lb-games">${d.gamesPlayed}</span>
+          <span class="lb-score">${d.totalScore}</span>
+        </div>
+      `).join('')}
+    `;
+  } catch (e) {
+    list.innerHTML = '<p style="text-align:center;color:#888;">Failed to load leaderboard</p>';
+  }
+}
 
 // ===== HELPERS =====
 function escapeHtml(str) {

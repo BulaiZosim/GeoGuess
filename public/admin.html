@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GeoGuess — Admin</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0f0f1a;
+      --bg-card: #1a1a2e;
+      --bg-card-hover: #222240;
+      --primary: #6c5ce7;
+      --primary-hover: #5a4bd1;
+      --accent: #00cec9;
+      --text: #e0e0e0;
+      --text-dim: #888;
+      --danger: #e74c3c;
+      --danger-hover: #c0392b;
+      --success: #2ecc71;
+      --radius: 8px;
+    }
+    html, body {
+      min-height: 100vh;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .container {
+      max-width: 700px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 8px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .subtitle {
+      color: var(--text-dim);
+      margin-bottom: 32px;
+    }
+    .back-link {
+      color: var(--accent);
+      text-decoration: none;
+      display: inline-block;
+      margin-bottom: 24px;
+    }
+    .back-link:hover { text-decoration: underline; }
+
+    /* Add player form */
+    .add-form {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 32px;
+    }
+    .add-form input {
+      flex: 1;
+      padding: 12px 16px;
+      border-radius: var(--radius);
+      border: 1px solid #333;
+      background: var(--bg-card);
+      color: var(--text);
+      font-size: 1rem;
+      outline: none;
+    }
+    .add-form input:focus { border-color: var(--primary); }
+    .add-form input::placeholder { color: var(--text-dim); }
+
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: var(--radius);
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-danger:hover { background: var(--danger-hover); }
+    .btn-small {
+      padding: 6px 14px;
+      font-size: 0.85rem;
+    }
+
+    .error-msg {
+      color: var(--danger);
+      margin-bottom: 16px;
+      min-height: 1.2em;
+    }
+
+    /* Player list */
+    .section-title {
+      font-size: 1.1rem;
+      color: var(--text-dim);
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-size: 0.85rem;
+    }
+    .player-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 40px;
+    }
+    .player-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      background: var(--bg-card);
+      border-radius: var(--radius);
+    }
+    .player-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--bg-card-hover);
+    }
+    .player-info {
+      flex: 1;
+    }
+    .player-name {
+      font-weight: 600;
+    }
+    .player-stats {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+    }
+    .player-stats span {
+      margin-right: 12px;
+    }
+
+    .empty-msg {
+      color: var(--text-dim);
+      font-style: italic;
+      padding: 20px;
+      text-align: center;
+    }
+
+    /* Danger zone */
+    .danger-zone {
+      border-top: 1px solid #333;
+      padding-top: 32px;
+    }
+    .danger-zone h3 {
+      color: var(--danger);
+      margin-bottom: 8px;
+    }
+    .danger-zone p {
+      color: var(--text-dim);
+      margin-bottom: 16px;
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <a href="/" class="back-link">← Back to game</a>
+    <h1>Admin Panel</h1>
+    <p class="subtitle">Manage players and game data</p>
+
+    <div class="section-title">Add Player</div>
+    <div class="add-form">
+      <input type="text" id="input-name" placeholder="Player name" maxlength="20" autocomplete="off" />
+      <button class="btn btn-primary" id="btn-add">Add</button>
+    </div>
+    <p class="error-msg" id="error-msg"></p>
+
+    <div class="section-title">Players (<span id="player-count">0</span>)</div>
+    <div class="player-list" id="player-list"></div>
+
+    <div class="danger-zone">
+      <h3>Danger Zone</h3>
+      <p>Reset all game scores and history. Player roster will be kept.</p>
+      <button class="btn btn-danger" id="btn-reset">Reset All Scores</button>
+    </div>
+  </div>
+
+  <script>
+    const listEl = document.getElementById('player-list');
+    const countEl = document.getElementById('player-count');
+    const errorEl = document.getElementById('error-msg');
+    const nameInput = document.getElementById('input-name');
+
+    async function loadPlayers() {
+      const [players, leaderboard] = await Promise.all([
+        fetch('/api/players').then(r => r.json()),
+        fetch('/api/leaderboard').then(r => r.json()),
+      ]);
+
+      const statsMap = {};
+      leaderboard.forEach(l => { statsMap[l.playerId] = l; });
+
+      countEl.textContent = players.length;
+
+      if (players.length === 0) {
+        listEl.innerHTML = '<div class="empty-msg">No players yet. Add some above!</div>';
+        return;
+      }
+
+      listEl.innerHTML = players.map(p => {
+        const stats = statsMap[p.id] || { totalScore: 0, gamesPlayed: 0 };
+        return `
+          <div class="player-row">
+            <img src="${p.avatarUrl}" class="player-avatar" alt="${p.name}" />
+            <div class="player-info">
+              <div class="player-name">${escapeHtml(p.name)}</div>
+              <div class="player-stats">
+                <span>${stats.gamesPlayed} games</span>
+                <span>${stats.totalScore} pts</span>
+              </div>
+            </div>
+            <button class="btn btn-danger btn-small" onclick="removePlayer(${p.id}, '${escapeHtml(p.name)}')">Remove</button>
+          </div>
+        `;
+      }).join('');
+    }
+
+    document.getElementById('btn-add').addEventListener('click', async () => {
+      const name = nameInput.value.trim();
+      if (!name) return showError('Enter a name');
+
+      const res = await fetch('/api/players', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+
+      if (data.error) return showError(data.error);
+
+      nameInput.value = '';
+      errorEl.textContent = '';
+      loadPlayers();
+    });
+
+    nameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('btn-add').click();
+    });
+
+    async function removePlayer(id, name) {
+      if (!confirm(`Remove ${name}? Their score history will also be deleted.`)) return;
+
+      await fetch(`/api/players/${id}`, { method: 'DELETE' });
+      loadPlayers();
+    }
+
+    document.getElementById('btn-reset').addEventListener('click', async () => {
+      if (!confirm('Are you sure? This will delete ALL game history and scores. Players will be kept.')) return;
+
+      await fetch('/api/reset-scores', { method: 'POST' });
+      loadPlayers();
+    });
+
+    function showError(msg) {
+      errorEl.textContent = msg;
+      setTimeout(() => errorEl.textContent = '', 4000);
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    loadPlayers();
+  </script>
+</body>
+</html>
