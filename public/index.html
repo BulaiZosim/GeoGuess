@@ -10,30 +10,38 @@
 <body>
   <!-- ===== LANDING SCREEN ===== -->
   <div id="screen-landing" class="screen active">
-    <div class="landing-container">
-      <h1 class="logo">GeoGuess</h1>
-      <p class="tagline">Guess the location. Compete with friends.</p>
+    <div class="landing-layout">
+      <div class="landing-container">
+        <h1 class="logo">GeoGuess</h1>
+        <p class="tagline">Guess the location. Compete with friends.</p>
 
-      <div class="section-label">Select your player</div>
-      <div id="avatar-grid" class="avatar-grid"></div>
+        <div class="section-label">Select your player</div>
+        <div id="avatar-grid" class="avatar-grid"></div>
 
-      <div id="active-rooms-section" class="active-rooms-section" style="display:none;">
-        <div class="section-label">Active Games</div>
-        <div id="active-rooms" class="active-rooms"></div>
-      </div>
-
-      <div class="landing-form">
-        <div class="landing-buttons">
-          <button id="btn-create" class="btn btn-primary" disabled>Create Game</button>
-          <div class="join-row">
-            <input type="text" id="input-code" placeholder="Room code" maxlength="6" autocomplete="off" />
-            <button id="btn-join" class="btn btn-secondary" disabled>Join</button>
-          </div>
+        <div id="active-rooms-section" class="active-rooms-section" style="display:none;">
+          <div class="section-label">Active Games</div>
+          <div id="active-rooms" class="active-rooms"></div>
         </div>
-        <p id="landing-error" class="error-text"></p>
+
+        <div class="landing-form">
+          <div class="landing-buttons">
+            <button id="btn-create" class="btn btn-primary" disabled>Create Game</button>
+            <div class="join-row">
+              <input type="text" id="input-code" placeholder="Room code" maxlength="6" autocomplete="off" />
+              <button id="btn-join" class="btn btn-secondary" disabled>Join</button>
+            </div>
+          </div>
+          <p id="landing-error" class="error-text"></p>
+        </div>
+
+        <button id="btn-leaderboard" class="btn btn-ghost">Leaderboard</button>
       </div>
 
-      <button id="btn-leaderboard" class="btn btn-ghost">Leaderboard</button>
+      <!-- Stats panel (right side) -->
+      <div id="stats-panel" class="stats-panel" style="display:none;">
+        <div id="stats-header" class="stats-header"></div>
+        <div id="stats-cards" class="stats-cards"></div>
+      </div>
     </div>
   </div>
 
@@ -88,15 +96,6 @@
       <div id="gameover-standings" class="standings"></div>
       <button id="btn-back-lobby" class="btn btn-primary" style="display:none;">Back to Lobby</button>
       <p id="gameover-waiting" class="waiting-text" style="display:none;">Waiting for host...</p>
-    </div>
-  </div>
-
-  <!-- ===== PLAYER STATS SCREEN ===== -->
-  <div id="screen-stats" class="screen">
-    <div class="stats-container">
-      <div id="stats-header" class="stats-header"></div>
-      <div id="stats-cards" class="stats-cards"></div>
-      <button id="btn-stats-back" class="btn btn-secondary">Back</button>
     </div>
   </div>
 

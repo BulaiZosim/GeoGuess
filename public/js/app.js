@@ -64,12 +64,6 @@ async function loadPlayerGrid() {
       card.addEventListener('click', () => {
         const clickedId = parseInt(card.dataset.playerId);
 
-        // If already selected, show stats
-        if (state.selectedPlayerId === clickedId) {
-          showPlayerStats(clickedId);
-          return;
-        }
-
         grid.querySelectorAll('.avatar-card').forEach(c => c.classList.remove('selected'));
         card.classList.add('selected');
         state.selectedPlayerId = clickedId;
@@ -78,6 +72,9 @@ async function loadPlayerGrid() {
         document.getElementById('btn-create').disabled = false;
         document.getElementById('btn-join').disabled = false;
         document.querySelectorAll('.btn-join-room').forEach(b => b.disabled = false);
+
+        // Load stats in side panel
+        showPlayerStats(clickedId);
       });
     });
   } catch (e) {
@@ -203,18 +200,10 @@ function initSocket() {
   });
 
   socket.on('back_to_lobby', ({ players }) => {
-    // Clear any active countdowns
-    if (state.countdownInterval) {
-      clearInterval(state.countdownInterval);
-      state.countdownInterval = null;
-    }
-    if (state.timerInterval) {
-      clearInterval(state.timerInterval);
-      state.timerInterval = null;
-    }
-    showScreen('lobby');
-    renderLobbyPlayers(players);
-    updateHostControls();
+    // Go back to landing page (avatar selection) — game session is over
+    showScreen('landing');
+    // Refresh active rooms and player grid
+    loadActiveRooms();
   });
 
   return socket;
@@ -683,16 +672,13 @@ async function showLeaderboard() {
   }
 }
 
-// ===== PLAYER STATS =====
-document.getElementById('btn-stats-back').addEventListener('click', () => {
-  showScreen('landing');
-});
-
+// ===== PLAYER STATS (inline panel) =====
 async function showPlayerStats(playerId) {
-  showScreen('stats');
+  const panel = document.getElementById('stats-panel');
   const header = document.getElementById('stats-header');
   const cards = document.getElementById('stats-cards');
-  header.innerHTML = '<p style="text-align:center;color:#888;">Loading stats...</p>';
+  panel.style.display = '';
+  header.innerHTML = '<p style="text-align:center;color:#888;">Loading...</p>';
   cards.innerHTML = '';
 
   try {
