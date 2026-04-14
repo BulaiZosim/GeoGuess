@@ -63,6 +63,8 @@ async function loadPlayerGrid() {
 
         document.getElementById('btn-create').disabled = false;
         document.getElementById('btn-join').disabled = false;
+        // Update active room join buttons
+        document.querySelectorAll('.btn-join-room').forEach(b => b.disabled = false);
       });
     });
   } catch (e) {
@@ -71,6 +73,71 @@ async function loadPlayerGrid() {
 }
 
 loadPlayerGrid();
+
+// ===== ACTIVE ROOMS =====
+async function loadActiveRooms() {
+  try {
+    const rooms = await fetch('/api/rooms').then(r => r.json());
+    const section = document.getElementById('active-rooms-section');
+    const container = document.getElementById('active-rooms');
+
+    if (rooms.length === 0) {
+      section.style.display = 'none';
+      return;
+    }
+
+    section.style.display = '';
+    container.innerHTML = rooms.map(room => {
+      const stateLabel = room.state === 'lobby' ? 'In Lobby' :
+        room.state === 'game_over' ? 'Game Over' :
+        `Round ${room.currentRound}/${room.totalRounds}`;
+      const avatars = room.players.slice(0, 6).map(p =>
+        `<img src="${p.avatarUrl}" class="active-room-avatar" title="${escapeHtml(p.name)}" />`
+      ).join('');
+      const extra = room.playerCount > 6 ? `<span class="active-room-extra">+${room.playerCount - 6}</span>` : '';
+
+      return `
+        <div class="active-room-card">
+          <div class="active-room-info">
+            <div class="active-room-players">${avatars}${extra}</div>
+            <span class="active-room-state">${stateLabel}</span>
+          </div>
+          <button class="btn btn-primary btn-small btn-join-room" data-code="${room.code}" ${!state.selectedPlayerId ? 'disabled' : ''}>Join</button>
+        </div>
+      `;
+    }).join('');
+
+    container.querySelectorAll('.btn-join-room').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (!state.selectedPlayerId) return showError('Select your player first');
+        if (!state.socket) initSocket();
+
+        state.socket.emit('join_room', { code: btn.dataset.code, playerId: state.selectedPlayerId }, (res) => {
+          if (res.error) return showError(res.error);
+          state.roomCode = res.code;
+          state.isHost = false;
+          if (res.gameState) {
+            enterLobby(res);
+            showMidGameWaiting(res.gameState);
+          } else {
+            enterLobby(res);
+          }
+        });
+      });
+    });
+  } catch (e) {
+    // silently ignore
+  }
+}
+
+loadActiveRooms();
+// Refresh active rooms every 5 seconds while on landing page
+setInterval(() => {
+  const landing = document.getElementById('screen-landing');
+  if (landing.classList.contains('active')) {
+    loadActiveRooms();
+  }
+}, 5000);
 
 // ===== SOCKET SETUP =====
 function initSocket() {

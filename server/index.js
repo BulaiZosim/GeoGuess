@@ -46,6 +46,11 @@ app.get('/api/leaderboard', (req, res) => {
   res.json(db.getLeaderboard());
 });
 
+// Active rooms
+app.get('/api/rooms', (req, res) => {
+  res.json(rooms.getActiveRooms());
+});
+
 // Reset all scores
 app.post('/api/reset-scores', (req, res) => {
   db.resetAllScores();

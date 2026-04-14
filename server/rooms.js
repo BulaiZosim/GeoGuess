@@ -107,6 +107,24 @@ class RoomManager {
     return null;
   }
 
+  getActiveRooms() {
+    const active = [];
+    for (const room of this.rooms.values()) {
+      active.push({
+        code: room.code,
+        state: room.state,
+        currentRound: room.currentRound,
+        totalRounds: room.totalRounds,
+        playerCount: room.players.size,
+        players: [...room.players.values()].map(p => ({
+          name: p.name,
+          avatarUrl: avatarUrl(p.name),
+        })),
+      });
+    }
+    return active;
+  }
+
   getPlayerList(room) {
     return [...room.players.values()].map(p => ({
       id: p.id,
