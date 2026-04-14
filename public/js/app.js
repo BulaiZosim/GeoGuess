@@ -517,7 +517,7 @@ function showRoundResults({ round, totalRounds, actual, results, isLastRound }) 
 
   if (state.countdownInterval) clearInterval(state.countdownInterval);
 
-  let countdown = 10;
+  let countdown = 15;
   const label = isLastRound ? 'Final Results' : 'Next Round';
   btn.style.display = '';
   btn.textContent = `${label} in ${countdown}...`;
