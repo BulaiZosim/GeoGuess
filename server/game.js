@@ -51,13 +51,25 @@ function handleSocket(io, socket, rooms, db) {
       players: rooms.getPlayerList(room),
     });
 
-    // If game is in progress, send current game state to the late joiner
-    const gameState = room.state !== 'lobby' ? {
-      state: room.state,
-      round: room.currentRound,
-      totalRounds: room.totalRounds,
-      timeLimit: room.roundTime,
-    } : null;
+    // If a round is actively playing, send panorama + remaining time so they can join instantly
+    let gameState = null;
+    if (room.state === 'playing' && room.currentPanoId && room.roundStartedAt) {
+      const elapsed = Math.floor((Date.now() - room.roundStartedAt) / 1000);
+      const timeRemaining = Math.max(0, room.roundTime - elapsed);
+      gameState = {
+        state: 'playing',
+        round: room.currentRound,
+        totalRounds: room.totalRounds,
+        timeLimit: timeRemaining,
+        panoId: room.currentPanoId,
+      };
+    } else if (room.state !== 'lobby') {
+      gameState = {
+        state: room.state,
+        round: room.currentRound,
+        totalRounds: room.totalRounds,
+      };
+    }
 
     callback({
       code: room.code,
@@ -90,6 +102,8 @@ function handleSocket(io, socket, rooms, db) {
     if (room.state !== 'searching') return;
 
     room.currentLocation = { lat, lng };
+    room.currentPanoId = panoId;
+    room.roundStartedAt = Date.now();
     room.state = 'playing';
 
     io.to(room.code).emit('round_start_confirmed', {

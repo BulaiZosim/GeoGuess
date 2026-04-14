@@ -118,7 +118,7 @@ async function loadActiveRooms() {
           state.isHost = false;
           if (res.gameState) {
             enterLobby(res);
-            showMidGameWaiting(res.gameState);
+            handleMidGameJoin(res.gameState);
           } else {
             enterLobby(res);
           }
@@ -269,7 +269,7 @@ document.getElementById('btn-join').addEventListener('click', () => {
     if (res.gameState) {
       // Joined mid-game — show waiting screen until next round
       enterLobby(res);
-      showMidGameWaiting(res.gameState);
+      handleMidGameJoin(res.gameState);
     } else {
       enterLobby(res);
     }
@@ -287,11 +287,21 @@ function showError(msg) {
 }
 
 // ===== MID-GAME JOIN =====
-function showMidGameWaiting(gameState) {
-  // Show the lobby but with a message that the game is in progress
-  document.getElementById('btn-start').style.display = 'none';
-  document.getElementById('lobby-waiting').textContent = `Game in progress (Round ${gameState.round}/${gameState.totalRounds}). You'll join the next round!`;
-  document.getElementById('lobby-waiting').style.display = '';
+function handleMidGameJoin(gameState) {
+  if (gameState.state === 'playing' && gameState.panoId) {
+    // Jump straight into the round with remaining time
+    startGameRound({
+      round: gameState.round,
+      totalRounds: gameState.totalRounds,
+      timeLimit: gameState.timeLimit,
+      panoId: gameState.panoId,
+    });
+  } else {
+    // Searching or between rounds — show lobby with waiting message
+    document.getElementById('btn-start').style.display = 'none';
+    document.getElementById('lobby-waiting').textContent = `Game in progress (Round ${gameState.round}/${gameState.totalRounds}). Waiting for next round...`;
+    document.getElementById('lobby-waiting').style.display = '';
+  }
 }
 
 // ===== LOBBY =====
