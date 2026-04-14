@@ -198,7 +198,14 @@ document.getElementById('btn-join').addEventListener('click', () => {
     if (res.error) return showError(res.error);
     state.roomCode = res.code;
     state.isHost = false;
-    enterLobby(res);
+
+    if (res.gameState) {
+      // Joined mid-game — show waiting screen until next round
+      enterLobby(res);
+      showMidGameWaiting(res.gameState);
+    } else {
+      enterLobby(res);
+    }
   });
 });
 
@@ -210,6 +217,14 @@ function showError(msg) {
   const el = document.getElementById('landing-error');
   el.textContent = msg;
   setTimeout(() => el.textContent = '', 4000);
+}
+
+// ===== MID-GAME JOIN =====
+function showMidGameWaiting(gameState) {
+  // Show the lobby but with a message that the game is in progress
+  document.getElementById('btn-start').style.display = 'none';
+  document.getElementById('lobby-waiting').textContent = `Game in progress (Round ${gameState.round}/${gameState.totalRounds}). You'll join the next round!`;
+  document.getElementById('lobby-waiting').style.display = '';
 }
 
 // ===== LOBBY =====

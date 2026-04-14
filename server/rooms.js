@@ -56,7 +56,7 @@ class RoomManager {
   joinRoom(code, socketId, playerName, persistentPlayerId) {
     const room = this.getRoom(code);
     if (!room) return { error: 'Room not found' };
-    if (room.state !== 'lobby') return { error: 'Game already in progress' };
+    if (room.state === 'game_over') return { error: 'Game is over, wait for host to return to lobby' };
     if (room.players.size >= MAX_PLAYERS) return { error: 'Room is full (max 24 players)' };
 
     // Check if this persistent player is already in the room

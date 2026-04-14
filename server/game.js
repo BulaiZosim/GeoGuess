@@ -51,10 +51,19 @@ function handleSocket(io, socket, rooms, db) {
       players: rooms.getPlayerList(room),
     });
 
+    // If game is in progress, send current game state to the late joiner
+    const gameState = room.state !== 'lobby' ? {
+      state: room.state,
+      round: room.currentRound,
+      totalRounds: room.totalRounds,
+      timeLimit: room.roundTime,
+    } : null;
+
     callback({
       code: room.code,
       players: rooms.getPlayerList(room),
       isHost: false,
+      gameState,
     });
   });
 
