@@ -46,6 +46,13 @@ app.get('/api/leaderboard', (req, res) => {
   res.json(db.getLeaderboard());
 });
 
+// Player stats
+app.get('/api/players/:id/stats', (req, res) => {
+  const stats = db.getPlayerStats(parseInt(req.params.id));
+  if (!stats) return res.status(404).json({ error: 'Player not found' });
+  res.json(stats);
+});
+
 // Active rooms
 app.get('/api/rooms', (req, res) => {
   res.json(rooms.getActiveRooms());

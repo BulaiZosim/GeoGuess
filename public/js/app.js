@@ -57,14 +57,21 @@ async function loadPlayerGrid() {
 
     grid.querySelectorAll('.avatar-card').forEach(card => {
       card.addEventListener('click', () => {
+        const clickedId = parseInt(card.dataset.playerId);
+
+        // If already selected, show stats
+        if (state.selectedPlayerId === clickedId) {
+          showPlayerStats(clickedId);
+          return;
+        }
+
         grid.querySelectorAll('.avatar-card').forEach(c => c.classList.remove('selected'));
         card.classList.add('selected');
-        state.selectedPlayerId = parseInt(card.dataset.playerId);
+        state.selectedPlayerId = clickedId;
         state.selectedPlayerName = card.dataset.playerName;
 
         document.getElementById('btn-create').disabled = false;
         document.getElementById('btn-join').disabled = false;
-        // Update active room join buttons
         document.querySelectorAll('.btn-join-room').forEach(b => b.disabled = false);
       });
     });
@@ -659,6 +666,91 @@ async function showLeaderboard() {
     `;
   } catch (e) {
     list.innerHTML = '<p style="text-align:center;color:#888;">Failed to load leaderboard</p>';
+  }
+}
+
+// ===== PLAYER STATS =====
+document.getElementById('btn-stats-back').addEventListener('click', () => {
+  showScreen('landing');
+});
+
+async function showPlayerStats(playerId) {
+  showScreen('stats');
+  const header = document.getElementById('stats-header');
+  const cards = document.getElementById('stats-cards');
+  header.innerHTML = '<p style="text-align:center;color:#888;">Loading stats...</p>';
+  cards.innerHTML = '';
+
+  try {
+    const stats = await fetch(`/api/players/${playerId}/stats`).then(r => r.json());
+    if (stats.error) {
+      header.innerHTML = `<p style="color:#e74c3c;">${stats.error}</p>`;
+      return;
+    }
+
+    header.innerHTML = `
+      <img src="${stats.player.avatarUrl}" class="stats-avatar" alt="" />
+      <h2 class="stats-name">${escapeHtml(stats.player.name)}</h2>
+    `;
+
+    if (stats.gamesPlayed === 0) {
+      cards.innerHTML = '<p class="stats-empty">No games played yet. Go play some rounds!</p>';
+      return;
+    }
+
+    const statItems = [
+      {
+        icon: '🏆',
+        label: 'Win Rate',
+        value: `${stats.wins} / ${stats.gamesPlayed} games`,
+        detail: stats.gamesPlayed > 0 ? `${Math.round(stats.wins / stats.gamesPlayed * 100)}% win rate` : '',
+      },
+      {
+        icon: '🎯',
+        label: 'Best Guess Ever',
+        value: stats.bestGuess !== null ? `${stats.bestGuess} km` : 'N/A',
+        detail: stats.bestGuess !== null && stats.bestGuess < 50 ? 'Almost smelled the place!' :
+                stats.bestGuess !== null && stats.bestGuess < 500 ? 'Pretty sharp!' : '',
+      },
+      {
+        icon: '💀',
+        label: 'Worst Guess Ever',
+        value: stats.worstGuess !== null ? `${stats.worstGuess.toLocaleString()} km` : 'N/A',
+        detail: stats.worstGuess !== null && stats.worstGuess > 15000 ? 'Wrong side of the planet!' :
+                stats.worstGuess !== null && stats.worstGuess > 5000 ? 'Completely lost!' : '',
+      },
+      {
+        icon: '🧭',
+        label: 'Favorite Wrong Continent',
+        value: stats.favoriteWrongContinent || 'None yet',
+        detail: stats.favoriteWrongContinent ? `Guessed there ${stats.favoriteWrongContinentCount} times when wrong` : 'Gets every continent right!',
+      },
+      {
+        icon: '🍀',
+        label: 'Lucky Country',
+        value: stats.luckyCountry || 'Need more games',
+        detail: stats.luckyCountry ? `Avg ${stats.luckyCountryAvgScore} pts there` : 'Play more rounds to unlock!',
+      },
+      {
+        icon: '😈',
+        label: 'Cursed Country',
+        value: stats.cursedCountry || 'Need more games',
+        detail: stats.cursedCountry ? `Only ${stats.cursedCountryAvgScore} pts avg... yikes` : 'Play more rounds to unlock!',
+      },
+    ];
+
+    cards.innerHTML = statItems.map(s => `
+      <div class="stat-card">
+        <span class="stat-icon">${s.icon}</span>
+        <div class="stat-content">
+          <div class="stat-label">${s.label}</div>
+          <div class="stat-value">${s.value}</div>
+          ${s.detail ? `<div class="stat-detail">${s.detail}</div>` : ''}
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    header.innerHTML = '<p style="color:#e74c3c;">Failed to load stats</p>';
   }
 }
 

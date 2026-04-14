@@ -1,4 +1,5 @@
 const { generateRandomPoint } = require('./locations');
+const { getCountryName } = require('./geo');
 
 // Haversine distance in km
 function haversine(lat1, lon1, lat2, lon2) {
@@ -88,6 +89,7 @@ function handleSocket(io, socket, rooms, db) {
     room.state = 'playing';
     room.currentRound = 0;
     room.usedLocations = [];
+    room.roundData = []; // collect per-round guess data for stats
     for (const id of room.players.keys()) {
       room.scores.set(id, 0);
     }
@@ -101,8 +103,13 @@ function handleSocket(io, socket, rooms, db) {
     if (!room || room.hostId !== socket.id) return;
     if (room.state !== 'searching') return;
 
-    room.currentLocation = { lat, lng };
+    room.currentLocation = { lat, lng, country: null };
     room.currentPanoId = panoId;
+
+    // Fetch country name asynchronously (doesn't block the round)
+    getCountryName(lat, lng).then(country => {
+      if (room.currentLocation) room.currentLocation.country = country;
+    });
     room.roundStartedAt = Date.now();
     room.state = 'playing';
 
@@ -227,16 +234,33 @@ function endRound(io, room, rooms) {
       room.scores.set(socketId, (room.scores.get(socketId) || 0) + points);
     }
 
+    const distRounded = distance !== null ? Math.round(distance) : null;
+
     results.push({
       id: socketId,
       playerId: player.playerId,
       name: player.name,
       avatarUrl: `https://api.dicebear.com/9.x/adventurer/svg?seed=${encodeURIComponent(player.name)}`,
       guess: guess ? { lat: guess.lat, lng: guess.lng } : null,
-      distance: distance !== null ? Math.round(distance) : null,
+      distance: distRounded,
       points,
       totalScore: room.scores.get(socketId) || 0,
     });
+
+    // Collect round data for stats persistence
+    if (room.roundData) {
+      room.roundData.push({
+        playerId: player.playerId,
+        roundNum: room.currentRound,
+        guessLat: guess ? guess.lat : null,
+        guessLng: guess ? guess.lng : null,
+        actualLat: actual.lat,
+        actualLng: actual.lng,
+        actualCountry: actual.country || null,
+        distanceKm: distRounded,
+        score: points,
+      });
+    }
   }
 
   results.sort((a, b) => b.points - a.points);
@@ -270,10 +294,10 @@ function endGame(io, room, rooms, db) {
 
   standings.sort((a, b) => b.totalScore - a.totalScore);
 
-  // Save to database
+  // Save to database (game scores + round guess data)
   try {
-    db.saveGameResult(room.code, room.totalRounds, playerScores);
-    console.log(`Game saved: ${room.code}, ${playerScores.length} players`);
+    db.saveFullGameResult(room.code, room.totalRounds, playerScores, room.roundData || []);
+    console.log(`Game saved: ${room.code}, ${playerScores.length} players, ${(room.roundData || []).length} round guesses`);
   } catch (e) {
     console.error('Failed to save game result:', e);
   }

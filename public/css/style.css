@@ -685,6 +685,94 @@ html, body {
 .lb-games { color: var(--text-dim); text-align: center; }
 .lb-score { color: var(--accent); font-weight: 700; text-align: right; }
 
+/* ===== PLAYER STATS ===== */
+.stats-container {
+  margin: auto;
+  padding: 40px 24px;
+  max-width: 500px;
+  width: 100%;
+  overflow-y: auto;
+  max-height: 100%;
+}
+
+.stats-header {
+  text-align: center;
+  margin-bottom: 28px;
+}
+
+.stats-avatar {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  margin-bottom: 12px;
+}
+
+.stats-name {
+  font-size: 1.5rem;
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.stats-empty {
+  text-align: center;
+  color: var(--text-dim);
+  font-style: italic;
+  padding: 40px 0;
+}
+
+.stats-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  border: 1px solid #333;
+}
+
+.stat-icon {
+  font-size: 1.6rem;
+  flex-shrink: 0;
+  width: 40px;
+  text-align: center;
+}
+
+.stat-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.stat-label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 2px;
+}
+
+.stat-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.stat-detail {
+  font-size: 0.8rem;
+  color: var(--accent);
+  margin-top: 2px;
+  font-style: italic;
+}
+
 /* ===== RESPONSIVE ===== */
 @media (min-width: 900px) {
   .game-layout {
