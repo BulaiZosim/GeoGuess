@@ -17,6 +17,11 @@ const state = {
 
 // ===== SCREENS =====
 function showScreen(id) {
+  // Clear countdowns on any screen transition
+  if (state.countdownInterval) {
+    clearInterval(state.countdownInterval);
+    state.countdownInterval = null;
+  }
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(`screen-${id}`).classList.add('active');
 }
@@ -198,6 +203,15 @@ function initSocket() {
   });
 
   socket.on('back_to_lobby', ({ players }) => {
+    // Clear any active countdowns
+    if (state.countdownInterval) {
+      clearInterval(state.countdownInterval);
+      state.countdownInterval = null;
+    }
+    if (state.timerInterval) {
+      clearInterval(state.timerInterval);
+      state.timerInterval = null;
+    }
     showScreen('lobby');
     renderLobbyPlayers(players);
     updateHostControls();
