@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GeoGuess</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <!-- ===== LANDING SCREEN ===== -->
+  <div id="screen-landing" class="screen active">
+    <div class="landing-container">
+      <h1 class="logo">GeoGuess</h1>
+      <p class="tagline">Guess the location. Compete with friends.</p>
+
+      <div class="landing-form">
+        <input type="text" id="input-name" placeholder="Your display name" maxlength="20" autocomplete="off" />
+
+        <div class="landing-buttons">
+          <button id="btn-create" class="btn btn-primary">Create Game</button>
+          <div class="join-row">
+            <input type="text" id="input-code" placeholder="Room code" maxlength="6" autocomplete="off" />
+            <button id="btn-join" class="btn btn-secondary">Join</button>
+          </div>
+        </div>
+
+        <p id="landing-error" class="error-text"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== LOBBY SCREEN ===== -->
+  <div id="screen-lobby" class="screen">
+    <div class="lobby-container">
+      <h2>Room: <span id="lobby-code" class="room-code"></span></h2>
+      <p class="lobby-hint">Share this code with friends to join!</p>
+
+      <div id="lobby-players" class="player-list"></div>
+
+      <button id="btn-start" class="btn btn-primary" style="display:none;">Start Game</button>
+      <p id="lobby-waiting" class="waiting-text">Waiting for host to start...</p>
+    </div>
+  </div>
+
+  <!-- ===== GAME SCREEN ===== -->
+  <div id="screen-game" class="screen">
+    <div class="game-layout">
+      <!-- Top bar -->
+      <div class="game-topbar">
+        <span id="game-round" class="round-info"></span>
+        <span id="game-timer" class="timer">90</span>
+        <span id="game-guessed" class="guessed-info"></span>
+      </div>
+
+      <!-- Panorama -->
+      <div id="panorama" class="panorama-view"></div>
+
+      <!-- Map -->
+      <div id="map-container" class="map-container">
+        <div id="map" class="guess-map"></div>
+        <button id="btn-submit-guess" class="btn btn-submit" disabled>Place your guess on the map</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ROUND RESULTS SCREEN ===== -->
+  <div id="screen-results" class="screen">
+    <div class="results-container">
+      <h2 id="results-title"></h2>
+      <p id="results-country" class="result-country"></p>
+      <div id="results-map" class="results-map"></div>
+      <div id="results-table" class="results-table"></div>
+      <button id="btn-next-round" class="btn btn-primary" style="display:none;">Next Round</button>
+      <p id="results-waiting" class="waiting-text" style="display:none;">Waiting for host...</p>
+    </div>
+  </div>
+
+  <!-- ===== GAME OVER SCREEN ===== -->
+  <div id="screen-gameover" class="screen">
+    <div class="gameover-container">
+      <h2>Game Over!</h2>
+      <div id="gameover-podium" class="podium"></div>
+      <div id="gameover-standings" class="standings"></div>
+      <button id="btn-back-lobby" class="btn btn-primary" style="display:none;">Back to Lobby</button>
+      <p id="gameover-waiting" class="waiting-text" style="display:none;">Waiting for host...</p>
+    </div>
+  </div>
+
+  <script src="/config.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>
