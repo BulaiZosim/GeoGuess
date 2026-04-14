@@ -11,6 +11,7 @@ const state = {
   resultsMap: null,
   panorama: null,
   timerInterval: null,
+  countdownInterval: null,
   googleMapsReady: false,
 };
 
@@ -510,20 +511,41 @@ function showRoundResults({ round, totalRounds, actual, results, isLastRound }) 
     `).join('')}
   `;
 
-  if (state.isHost) {
-    const btn = document.getElementById('btn-next-round');
-    btn.style.display = '';
-    btn.textContent = isLastRound ? 'Show Final Results' : 'Next Round';
-    document.getElementById('results-waiting').style.display = 'none';
-  } else {
-    document.getElementById('btn-next-round').style.display = 'none';
-    document.getElementById('results-waiting').style.display = '';
-  }
-}
+  // Auto-continue countdown
+  const btn = document.getElementById('btn-next-round');
+  document.getElementById('results-waiting').style.display = 'none';
 
-document.getElementById('btn-next-round').addEventListener('click', () => {
-  state.socket.emit('next_round');
-});
+  if (state.countdownInterval) clearInterval(state.countdownInterval);
+
+  let countdown = 10;
+  const label = isLastRound ? 'Final Results' : 'Next Round';
+  btn.style.display = '';
+  btn.textContent = `${label} in ${countdown}...`;
+
+  state.countdownInterval = setInterval(() => {
+    countdown--;
+    if (countdown <= 0) {
+      clearInterval(state.countdownInterval);
+      state.countdownInterval = null;
+      if (state.isHost) {
+        state.socket.emit('next_round');
+      }
+    } else {
+      btn.textContent = `${label} in ${countdown}...`;
+    }
+  }, 1000);
+
+  // Allow host to skip the countdown
+  btn.onclick = () => {
+    if (state.countdownInterval) {
+      clearInterval(state.countdownInterval);
+      state.countdownInterval = null;
+    }
+    if (state.isHost) {
+      state.socket.emit('next_round');
+    }
+  };
+}
 
 // ===== GAME OVER =====
 function showGameOver({ standings }) {
@@ -560,18 +582,39 @@ function showGameOver({ standings }) {
     </div>
   `).join('');
 
-  if (state.isHost) {
-    document.getElementById('btn-back-lobby').style.display = '';
-    document.getElementById('gameover-waiting').style.display = 'none';
-  } else {
-    document.getElementById('btn-back-lobby').style.display = 'none';
-    document.getElementById('gameover-waiting').style.display = '';
-  }
-}
+  // Auto-countdown back to lobby
+  const lobbyBtn = document.getElementById('btn-back-lobby');
+  document.getElementById('gameover-waiting').style.display = 'none';
 
-document.getElementById('btn-back-lobby').addEventListener('click', () => {
-  state.socket.emit('back_to_lobby');
-});
+  if (state.countdownInterval) clearInterval(state.countdownInterval);
+
+  let countdown = 15;
+  lobbyBtn.style.display = '';
+  lobbyBtn.textContent = `Back to Lobby in ${countdown}...`;
+
+  state.countdownInterval = setInterval(() => {
+    countdown--;
+    if (countdown <= 0) {
+      clearInterval(state.countdownInterval);
+      state.countdownInterval = null;
+      if (state.isHost) {
+        state.socket.emit('back_to_lobby');
+      }
+    } else {
+      lobbyBtn.textContent = `Back to Lobby in ${countdown}...`;
+    }
+  }, 1000);
+
+  lobbyBtn.onclick = () => {
+    if (state.countdownInterval) {
+      clearInterval(state.countdownInterval);
+      state.countdownInterval = null;
+    }
+    if (state.isHost) {
+      state.socket.emit('back_to_lobby');
+    }
+  };
+}
 
 // ===== LEADERBOARD =====
 document.getElementById('btn-leaderboard').addEventListener('click', () => {
