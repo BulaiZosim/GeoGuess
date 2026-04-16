@@ -128,6 +128,12 @@ function handleSocket(io, socket, rooms, db) {
       isHost: room.hostPlayerId === playerId,
       gameState: buildGameState(room),
     });
+
+    // If the host returns mid-search (their original find_panorama was lost
+    // when they dropped), kick a fresh pano search so the round actually starts.
+    if (room.state === 'searching' && room.hostPlayerId === playerId) {
+      requestPanoSearchFromHost(io, room);
+    }
   });
 
   socket.on('start_game', (_, callback) => {
@@ -253,6 +259,13 @@ function handleSocket(io, socket, rooms, db) {
         newHostId: result.wasHost ? result.newHostSocketId : null,
         newHostPlayerId: result.wasHost ? result.newHostPlayerId : null,
       });
+
+      // If the evicted player was the host mid pano-search, the new host
+      // never received find_panorama. Re-kick the search so the round can
+      // actually begin.
+      if (result.wasHost && result.room.state === 'searching') {
+        requestPanoSearchFromHost(io, result.room);
+      }
     }, DISCONNECT_GRACE_MS);
   });
 }
@@ -262,21 +275,27 @@ function startRound(io, room, rooms) {
   room.guesses.clear();
   room.state = 'searching';
 
-  const candidates = [];
-  for (let i = 0; i < 20; i++) {
-    candidates.push(generateRandomPoint());
-  }
-
   io.to(room.code).emit('round_searching', {
     round: room.currentRound,
     totalRounds: room.totalRounds,
   });
 
-  // Emit pano-search only to the host's current socket.
+  requestPanoSearchFromHost(io, room);
+}
+
+// Send a fresh batch of candidates to whoever the current host is.
+// Called both at round start and any time the host changes/reconnects while
+// state is 'searching', so the pano search doesn't get stranded on a
+// disconnected host's browser.
+function requestPanoSearchFromHost(io, room) {
   const hostPlayer = room.players.get(room.hostPlayerId);
-  if (hostPlayer?.connected && hostPlayer.socketId) {
-    io.to(hostPlayer.socketId).emit('find_panorama', { candidates });
+  if (!hostPlayer?.connected || !hostPlayer.socketId) return;
+
+  const candidates = [];
+  for (let i = 0; i < 20; i++) {
+    candidates.push(generateRandomPoint());
   }
+  io.to(hostPlayer.socketId).emit('find_panorama', { candidates });
 }
 
 function endRound(io, room, rooms) {
