@@ -283,7 +283,9 @@ function findValidPanorama(candidates) {
 
   function tryNext() {
     if (index >= candidates.length) {
-      console.warn('All candidates failed');
+      console.warn('All candidates failed; asking server to retry');
+      // Server decides whether to send a fresh batch or end the game.
+      state.socket.emit('pano_search_failed');
       return;
     }
 

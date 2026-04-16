@@ -7,6 +7,9 @@ const DISCONNECT_GRACE_MS = 60_000;
 // label so the UI and server stay in sync; the server is the source of truth.
 const RESULTS_AUTO_ADVANCE_MS = 15_000;
 const GAMEOVER_AUTO_ADVANCE_MS = 15_000;
+// Max number of candidate batches we ask the host to search before giving up
+// on the round. The initial batch is attempt 1.
+const MAX_PANO_SEARCH_ATTEMPTS = 3;
 
 // Haversine distance in km
 function haversine(lat1, lon1, lat2, lon2) {
@@ -158,6 +161,23 @@ function handleSocket(io, socket, rooms, db) {
     callback?.({ ok: true });
   });
 
+  // Host's client tells us all 20 candidates in the latest batch had no Street
+  // View coverage. We either retry with a fresh batch or, after
+  // MAX_PANO_SEARCH_ATTEMPTS total batches, end the game with current scores
+  // so players at least see a result screen.
+  socket.on('pano_search_failed', () => {
+    const room = getCallerRoom(socket, rooms);
+    if (!room || !isCallerHost(socket, room)) return;
+    if (room.state !== 'searching') return;
+
+    if ((room.panoSearchAttempts || 0) >= MAX_PANO_SEARCH_ATTEMPTS) {
+      console.warn(`Room ${room.code}: pano search exhausted after ${room.panoSearchAttempts} attempts; ending game`);
+      endGame(io, room, rooms, db);
+      return;
+    }
+    requestPanoSearchFromHost(io, room, { isRetry: true });
+  });
+
   socket.on('location_found', ({ lat, lng, panoId }) => {
     const room = getCallerRoom(socket, rooms);
     if (!room || !isCallerHost(socket, room)) return;
@@ -275,28 +295,38 @@ function startRound(io, room, rooms) {
   room.currentRound++;
   room.guesses.clear();
   room.state = 'searching';
+  room.panoSearchAttempts = 0; // reset per round
 
   io.to(room.code).emit('round_searching', {
     round: room.currentRound,
     totalRounds: room.totalRounds,
   });
 
-  requestPanoSearchFromHost(io, room);
+  requestPanoSearchFromHost(io, room, { isRetry: false });
 }
 
 // Send a fresh batch of candidates to whoever the current host is.
-// Called both at round start and any time the host changes/reconnects while
-// state is 'searching', so the pano search doesn't get stranded on a
-// disconnected host's browser.
-function requestPanoSearchFromHost(io, room) {
+// Called at round start, on host reconnect/transfer during 'searching', and
+// on pano_search_failed retries. Only bumps the attempt counter when it's
+// actually a retry — recoveries after a disconnect re-use the current slot.
+function requestPanoSearchFromHost(io, room, { isRetry = false } = {}) {
   const hostPlayer = room.players.get(room.hostPlayerId);
   if (!hostPlayer?.connected || !hostPlayer.socketId) return;
+
+  if (isRetry) {
+    room.panoSearchAttempts = (room.panoSearchAttempts || 0) + 1;
+  } else if (!room.panoSearchAttempts) {
+    room.panoSearchAttempts = 1;
+  }
 
   const candidates = [];
   for (let i = 0; i < 20; i++) {
     candidates.push(generateRandomPoint());
   }
-  io.to(hostPlayer.socketId).emit('find_panorama', { candidates });
+  io.to(hostPlayer.socketId).emit('find_panorama', {
+    candidates,
+    attempt: room.panoSearchAttempts,
+  });
 }
 
 function endRound(io, room, rooms, db) {
