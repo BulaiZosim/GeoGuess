@@ -10,6 +10,10 @@ const GAMEOVER_AUTO_ADVANCE_MS = 15_000;
 // Max number of candidate batches we ask the host to search before giving up
 // on the round. The initial batch is attempt 1.
 const MAX_PANO_SEARCH_ATTEMPTS = 3;
+// How long the server waits for the host to respond (with either
+// location_found or pano_search_failed) before treating the attempt as
+// hung and retrying / giving up. Handles frozen tabs, blocked Maps JS, etc.
+const SEARCH_WATCHDOG_MS = 30_000;
 
 // Haversine distance in km
 function haversine(lat1, lon1, lat2, lon2) {
@@ -139,7 +143,7 @@ function handleSocket(io, socket, rooms, db) {
     // If the host returns mid-search (their original find_panorama was lost
     // when they dropped), kick a fresh pano search so the round actually starts.
     if (room.state === 'searching' && room.hostPlayerId === playerId) {
-      requestPanoSearchFromHost(io, room);
+      requestPanoSearchFromHost(io, room, rooms, db);
     }
   });
 
@@ -159,7 +163,7 @@ function handleSocket(io, socket, rooms, db) {
       room.scores.set(playerId, 0);
     }
 
-    startRound(io, room, rooms);
+    startRound(io, room, rooms, db);
     callback?.({ ok: true });
   });
 
@@ -177,7 +181,7 @@ function handleSocket(io, socket, rooms, db) {
       endGame(io, room, rooms, db);
       return;
     }
-    requestPanoSearchFromHost(io, room, { isRetry: true });
+    requestPanoSearchFromHost(io, room, rooms, db, { isRetry: true });
   });
 
   socket.on('location_found', async ({ panoId }) => {
@@ -200,12 +204,13 @@ function handleSocket(io, socket, rooms, db) {
       if ((room.panoSearchAttempts || 0) >= MAX_PANO_SEARCH_ATTEMPTS) {
         endGame(io, room, rooms, db);
       } else {
-        requestPanoSearchFromHost(io, room, { isRetry: true });
+        requestPanoSearchFromHost(io, room, rooms, db, { isRetry: true });
       }
       return;
     }
 
     const { lat, lng } = resolved;
+    cancelSearchWatchdog(room);
     room.currentLocation = { lat, lng, country: null };
     room.currentPanoId = panoId;
 
@@ -264,7 +269,7 @@ function handleSocket(io, socket, rooms, db) {
     if (room.currentRound >= room.totalRounds) {
       endGame(io, room, rooms, db);
     } else {
-      startRound(io, room, rooms);
+      startRound(io, room, rooms, db);
     }
   });
 
@@ -313,13 +318,13 @@ function handleSocket(io, socket, rooms, db) {
       // never received find_panorama. Re-kick the search so the round can
       // actually begin.
       if (result.wasHost && result.room.state === 'searching') {
-        requestPanoSearchFromHost(io, result.room);
+        requestPanoSearchFromHost(io, result.room, rooms, db);
       }
     }, DISCONNECT_GRACE_MS);
   });
 }
 
-function startRound(io, room, rooms) {
+function startRound(io, room, rooms, db) {
   room.currentRound++;
   room.guesses.clear();
   room.state = 'searching';
@@ -330,16 +335,23 @@ function startRound(io, room, rooms) {
     totalRounds: room.totalRounds,
   });
 
-  requestPanoSearchFromHost(io, room, { isRetry: false });
+  requestPanoSearchFromHost(io, room, rooms, db, { isRetry: false });
 }
 
 // Send a fresh batch of candidates to whoever the current host is.
 // Called at round start, on host reconnect/transfer during 'searching', and
 // on pano_search_failed retries. Only bumps the attempt counter when it's
 // actually a retry — recoveries after a disconnect re-use the current slot.
-function requestPanoSearchFromHost(io, room, { isRetry = false } = {}) {
+// Also (re)arms the search watchdog so a hung/silent host doesn't strand
+// the room in 'searching' indefinitely.
+function requestPanoSearchFromHost(io, room, rooms, db, { isRetry = false } = {}) {
   const hostPlayer = room.players.get(room.hostPlayerId);
-  if (!hostPlayer?.connected || !hostPlayer.socketId) return;
+  if (!hostPlayer?.connected || !hostPlayer.socketId) {
+    // No connected host right now. Leave the watchdog armed if there is one
+    // (a host may reconnect and re-trigger requestPanoSearchFromHost), but
+    // don't fabricate a fresh one here.
+    return;
+  }
 
   if (isRetry) {
     room.panoSearchAttempts = (room.panoSearchAttempts || 0) + 1;
@@ -355,6 +367,34 @@ function requestPanoSearchFromHost(io, room, { isRetry = false } = {}) {
     candidates,
     attempt: room.panoSearchAttempts,
   });
+
+  scheduleSearchWatchdog(io, room, rooms, db);
+}
+
+// Fires if the host doesn't respond to find_panorama (neither location_found
+// nor pano_search_failed) within SEARCH_WATCHDOG_MS. Treats the silence as a
+// failed batch so the existing retry/giveup flow runs.
+function scheduleSearchWatchdog(io, room, rooms, db) {
+  cancelSearchWatchdog(room);
+  room.searchWatchdog = setTimeout(() => {
+    room.searchWatchdog = null;
+    if (rooms.getRoom(room.code) !== room) return;
+    if (room.state !== 'searching') return;
+
+    console.warn(`Room ${room.code}: search watchdog fired at attempt ${room.panoSearchAttempts}`);
+    if ((room.panoSearchAttempts || 0) >= MAX_PANO_SEARCH_ATTEMPTS) {
+      endGame(io, room, rooms, db);
+    } else {
+      requestPanoSearchFromHost(io, room, rooms, db, { isRetry: true });
+    }
+  }, SEARCH_WATCHDOG_MS);
+}
+
+function cancelSearchWatchdog(room) {
+  if (room.searchWatchdog) {
+    clearTimeout(room.searchWatchdog);
+    room.searchWatchdog = null;
+  }
 }
 
 function endRound(io, room, rooms, db) {
@@ -423,6 +463,7 @@ function endRound(io, room, rooms, db) {
 }
 
 function endGame(io, room, rooms, db) {
+  cancelSearchWatchdog(room);
   room.state = 'game_over';
 
   const standings = [];
@@ -468,7 +509,7 @@ function scheduleResultsAdvance(io, room, rooms, db) {
     if (room.currentRound >= room.totalRounds) {
       endGame(io, room, rooms, db);
     } else {
-      startRound(io, room, rooms);
+      startRound(io, room, rooms, db);
     }
   }, RESULTS_AUTO_ADVANCE_MS);
 }
@@ -503,6 +544,7 @@ function cancelGameoverAdvance(room) {
 }
 
 function resetRoomToLobby(room) {
+  cancelSearchWatchdog(room);
   room.state = 'lobby';
   room.currentRound = 0;
   room.usedLocations = [];
