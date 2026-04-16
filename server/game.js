@@ -147,7 +147,9 @@ function handleSocket(io, socket, rooms, db) {
     const room = getCallerRoom(socket, rooms);
     if (!room) return callback?.({ error: 'Not in a room' });
     if (!isCallerHost(socket, room)) return callback?.({ error: 'Only the host can start' });
-    if (room.players.size < 1) return callback?.({ error: 'Need at least 1 player' });
+    // Guard against double-start or starting mid-game: a stray click /
+    // duplicate emit would otherwise wipe progress and restart the round loop.
+    if (room.state !== 'lobby') return callback?.({ error: 'Game already in progress' });
 
     room.state = 'playing';
     room.currentRound = 0;
@@ -207,7 +209,12 @@ function handleSocket(io, socket, rooms, db) {
     }, room.roundTime * 1000);
   });
 
-  socket.on('submit_guess', ({ lat, lng }) => {
+  socket.on('submit_guess', ({ lat, lng } = {}) => {
+    // Validate coords at the boundary so NaN / out-of-range values can't
+    // corrupt scoring or DB rows.
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return;
+
     const room = getCallerRoom(socket, rooms);
     if (!room || room.state !== 'playing') return;
     const playerId = getCallerPlayerId(socket);
@@ -330,6 +337,9 @@ function requestPanoSearchFromHost(io, room, { isRetry = false } = {}) {
 }
 
 function endRound(io, room, rooms, db) {
+  // Idempotency guard: protects against the rare race where a guess submit
+  // and the round timer both call endRound for the same round.
+  if (room.state !== 'playing') return;
   room.state = 'round_results';
   if (room.roundTimer) {
     clearTimeout(room.roundTimer);
