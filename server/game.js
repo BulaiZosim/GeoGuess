@@ -3,6 +3,10 @@ const { getCountryName } = require('./geo');
 
 // How long a disconnected player's slot is held before they're fully evicted.
 const DISCONNECT_GRACE_MS = 60_000;
+// Server-driven auto-advance durations. These match the client-side countdown
+// label so the UI and server stay in sync; the server is the source of truth.
+const RESULTS_AUTO_ADVANCE_MS = 15_000;
+const GAMEOVER_AUTO_ADVANCE_MS = 15_000;
 
 // Haversine distance in km
 function haversine(lat1, lon1, lat2, lon2) {
@@ -179,7 +183,7 @@ function handleSocket(io, socket, rooms, db) {
     });
 
     room.roundTimer = setTimeout(() => {
-      endRound(io, room, rooms);
+      endRound(io, room, rooms, db);
     }, room.roundTime * 1000);
   });
 
@@ -199,7 +203,7 @@ function handleSocket(io, socket, rooms, db) {
 
     if (room.guesses.size >= room.players.size) {
       if (room.roundTimer) clearTimeout(room.roundTimer);
-      endRound(io, room, rooms);
+      endRound(io, room, rooms, db);
     }
   });
 
@@ -207,6 +211,7 @@ function handleSocket(io, socket, rooms, db) {
     const room = getCallerRoom(socket, rooms);
     if (!room || !isCallerHost(socket, room)) return;
     if (room.state !== 'round_results') return;
+    cancelResultsAdvance(room);
 
     if (room.currentRound >= room.totalRounds) {
       endGame(io, room, rooms, db);
@@ -218,14 +223,10 @@ function handleSocket(io, socket, rooms, db) {
   socket.on('back_to_lobby', () => {
     const room = getCallerRoom(socket, rooms);
     if (!room || !isCallerHost(socket, room)) return;
+    cancelGameoverAdvance(room);
+    cancelResultsAdvance(room);
 
-    room.state = 'lobby';
-    room.currentRound = 0;
-    room.usedLocations = [];
-    room.guesses.clear();
-    for (const playerId of room.players.keys()) {
-      room.scores.set(playerId, 0);
-    }
+    resetRoomToLobby(room);
 
     io.to(room.code).emit('back_to_lobby', {
       players: rooms.getPlayerList(room),
@@ -298,7 +299,7 @@ function requestPanoSearchFromHost(io, room) {
   io.to(hostPlayer.socketId).emit('find_panorama', { candidates });
 }
 
-function endRound(io, room, rooms) {
+function endRound(io, room, rooms, db) {
   room.state = 'round_results';
   if (room.roundTimer) {
     clearTimeout(room.roundTimer);
@@ -356,6 +357,8 @@ function endRound(io, room, rooms) {
     results,
     isLastRound: room.currentRound >= room.totalRounds,
   });
+
+  scheduleResultsAdvance(io, room, rooms, db);
 }
 
 function endGame(io, room, rooms, db) {
@@ -386,6 +389,66 @@ function endGame(io, room, rooms, db) {
   }
 
   io.to(room.code).emit('game_over', { standings });
+
+  scheduleGameoverAdvance(io, room, rooms);
+}
+
+// Auto-advance from round_results to the next round (or endGame). Runs on a
+// server timer so the game progresses even if nobody with host status is
+// present to click/emit.
+function scheduleResultsAdvance(io, room, rooms, db) {
+  cancelResultsAdvance(room);
+  room.resultsAdvanceTimer = setTimeout(() => {
+    room.resultsAdvanceTimer = null;
+    // Guard: room was deleted, or state already moved on (e.g. host skipped).
+    if (rooms.getRoom(room.code) !== room) return;
+    if (room.state !== 'round_results') return;
+
+    if (room.currentRound >= room.totalRounds) {
+      endGame(io, room, rooms, db);
+    } else {
+      startRound(io, room, rooms);
+    }
+  }, RESULTS_AUTO_ADVANCE_MS);
+}
+
+function cancelResultsAdvance(room) {
+  if (room.resultsAdvanceTimer) {
+    clearTimeout(room.resultsAdvanceTimer);
+    room.resultsAdvanceTimer = null;
+  }
+}
+
+// Auto-reset from game_over back to lobby. Same pattern as results advance.
+function scheduleGameoverAdvance(io, room, rooms) {
+  cancelGameoverAdvance(room);
+  room.gameoverAdvanceTimer = setTimeout(() => {
+    room.gameoverAdvanceTimer = null;
+    if (rooms.getRoom(room.code) !== room) return;
+    if (room.state !== 'game_over') return;
+
+    resetRoomToLobby(room);
+    io.to(room.code).emit('back_to_lobby', {
+      players: rooms.getPlayerList(room),
+    });
+  }, GAMEOVER_AUTO_ADVANCE_MS);
+}
+
+function cancelGameoverAdvance(room) {
+  if (room.gameoverAdvanceTimer) {
+    clearTimeout(room.gameoverAdvanceTimer);
+    room.gameoverAdvanceTimer = null;
+  }
+}
+
+function resetRoomToLobby(room) {
+  room.state = 'lobby';
+  room.currentRound = 0;
+  room.usedLocations = [];
+  room.guesses.clear();
+  for (const playerId of room.players.keys()) {
+    room.scores.set(playerId, 0);
+  }
 }
 
 module.exports = { handleSocket };
