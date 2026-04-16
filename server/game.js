@@ -1,5 +1,5 @@
 const { generateRandomPoint } = require('./locations');
-const { getCountryName } = require('./geo');
+const { getCountryName, resolvePanoLocation } = require('./geo');
 
 // How long a disconnected player's slot is held before they're fully evicted.
 const DISCONNECT_GRACE_MS = 60_000;
@@ -180,11 +180,32 @@ function handleSocket(io, socket, rooms, db) {
     requestPanoSearchFromHost(io, room, { isRetry: true });
   });
 
-  socket.on('location_found', ({ lat, lng, panoId }) => {
+  socket.on('location_found', async ({ panoId }) => {
     const room = getCallerRoom(socket, rooms);
     if (!room || !isCallerHost(socket, room)) return;
     if (room.state !== 'searching') return;
 
+    // Server-authoritative: resolve the pano's real lat/lng via Google's
+    // metadata endpoint. Any coordinates the host sent are ignored.
+    const resolved = await resolvePanoLocation(panoId);
+
+    // Room may have moved on during the fetch (host disconnect, room deleted).
+    if (rooms.getRoom(room.code) !== room) return;
+    if (room.state !== 'searching') return;
+
+    if (resolved.error) {
+      console.warn(`Room ${room.code}: pano resolve failed — ${resolved.error}`);
+      // Treat as a failed candidate batch so the existing retry/giveup
+      // flow takes over rather than stranding the room.
+      if ((room.panoSearchAttempts || 0) >= MAX_PANO_SEARCH_ATTEMPTS) {
+        endGame(io, room, rooms, db);
+      } else {
+        requestPanoSearchFromHost(io, room, { isRetry: true });
+      }
+      return;
+    }
+
+    const { lat, lng } = resolved;
     room.currentLocation = { lat, lng, country: null };
     room.currentPanoId = panoId;
 

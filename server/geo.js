@@ -54,4 +54,29 @@ async function getCountryName(lat, lng) {
   }
 }
 
-module.exports = { getContinent, getCountryName };
+// Resolve a Street View panoId to its authoritative lat/lng via Google's
+// Street View metadata endpoint. Used server-side so the host's client
+// can't lie about the round's actual location.
+// Requires GOOGLE_MAPS_API_KEY with the Street View Static API enabled.
+async function resolvePanoLocation(panoId) {
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (!apiKey) return { error: 'Server has no Google Maps API key' };
+  if (!panoId) return { error: 'Missing panoId' };
+  try {
+    const url = `https://maps.googleapis.com/maps/api/streetview/metadata?pano=${encodeURIComponent(panoId)}&key=${apiKey}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.status !== 'OK') {
+      return { error: `Street View metadata status: ${data.status}` };
+    }
+    const loc = data.location;
+    if (!loc || typeof loc.lat !== 'number' || typeof loc.lng !== 'number') {
+      return { error: 'Street View metadata missing location' };
+    }
+    return { lat: loc.lat, lng: loc.lng };
+  } catch (e) {
+    return { error: `Street View metadata fetch failed: ${e.message}` };
+  }
+}
+
+module.exports = { getContinent, getCountryName, resolvePanoLocation };

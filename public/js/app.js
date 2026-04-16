@@ -299,11 +299,9 @@ function findValidPanorama(candidates) {
       source: google.maps.StreetViewSource.OUTDOOR,
     }, (data, status) => {
       if (status === google.maps.StreetViewStatus.OK) {
-        const actualLat = data.location.latLng.lat();
-        const actualLng = data.location.latLng.lng();
+        // Server resolves the pano's authoritative lat/lng itself, so we
+        // only need to report the id here.
         state.socket.emit('location_found', {
-          lat: actualLat,
-          lng: actualLng,
           panoId: data.location.pano,
         });
       } else {
