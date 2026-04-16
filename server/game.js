@@ -1,6 +1,9 @@
 const { generateRandomPoint } = require('./locations');
 const { getCountryName } = require('./geo');
 
+// How long a disconnected player's slot is held before they're fully evicted.
+const DISCONNECT_GRACE_MS = 60_000;
+
 // Haversine distance in km
 function haversine(lat1, lon1, lat2, lon2) {
   const R = 6371;
@@ -17,6 +20,39 @@ function calculateScore(distanceKm) {
   return Math.round(5000 * Math.exp(-distanceKm / 2000));
 }
 
+// Helpers to resolve the caller's player identity from the socket.
+// socket.data.playerId is set on create_room / join_room / resume_session.
+function getCallerPlayerId(socket) {
+  return socket.data?.playerId ?? null;
+}
+function getCallerRoom(socket, rooms) {
+  const pid = getCallerPlayerId(socket);
+  return pid != null ? rooms.getRoomByPlayerId(pid) : null;
+}
+function isCallerHost(socket, room) {
+  return room && room.hostPlayerId === getCallerPlayerId(socket);
+}
+
+// Build the gameState payload sent to (re)joining clients so the UI can
+// restore itself mid-round without waiting for the next event.
+function buildGameState(room) {
+  if (room.state === 'playing' && room.currentPanoId && room.roundStartedAt) {
+    const elapsed = Math.floor((Date.now() - room.roundStartedAt) / 1000);
+    const timeRemaining = Math.max(0, room.roundTime - elapsed);
+    return {
+      state: 'playing',
+      round: room.currentRound,
+      totalRounds: room.totalRounds,
+      timeLimit: timeRemaining,
+      panoId: room.currentPanoId,
+    };
+  }
+  if (room.state !== 'lobby') {
+    return { state: room.state, round: room.currentRound, totalRounds: room.totalRounds };
+  }
+  return null;
+}
+
 function handleSocket(io, socket, rooms, db) {
   console.log(`Connected: ${socket.id}`);
 
@@ -27,9 +63,12 @@ function handleSocket(io, socket, rooms, db) {
     if (!player) return callback({ error: 'Player not found' });
 
     const room = rooms.createRoom(socket.id, player.name, player.id);
+    socket.data.playerId = player.id;
+    socket.data.roomCode = room.code;
     socket.join(room.code);
     callback({
       code: room.code,
+      playerId: player.id,
       players: rooms.getPlayerList(room),
       isHost: true,
     });
@@ -46,52 +85,63 @@ function handleSocket(io, socket, rooms, db) {
     if (result.error) return callback({ error: result.error });
 
     const room = result.room;
+    socket.data.playerId = player.id;
+    socket.data.roomCode = room.code;
     socket.join(room.code);
 
     io.to(room.code).emit('player_joined', {
       players: rooms.getPlayerList(room),
     });
 
-    // If a round is actively playing, send panorama + remaining time so they can join instantly
-    let gameState = null;
-    if (room.state === 'playing' && room.currentPanoId && room.roundStartedAt) {
-      const elapsed = Math.floor((Date.now() - room.roundStartedAt) / 1000);
-      const timeRemaining = Math.max(0, room.roundTime - elapsed);
-      gameState = {
-        state: 'playing',
-        round: room.currentRound,
-        totalRounds: room.totalRounds,
-        timeLimit: timeRemaining,
-        panoId: room.currentPanoId,
-      };
-    } else if (room.state !== 'lobby') {
-      gameState = {
-        state: room.state,
-        round: room.currentRound,
-        totalRounds: room.totalRounds,
-      };
-    }
-
     callback({
       code: room.code,
+      playerId: player.id,
       players: rooms.getPlayerList(room),
-      isHost: false,
-      gameState,
+      isHost: room.hostPlayerId === player.id,
+      gameState: buildGameState(room),
+    });
+  });
+
+  // Called by a reconnecting client with its persistent playerId + room code.
+  // Rebinds the new socket to the existing player slot, cancels the grace timer.
+  socket.on('resume_session', ({ code, playerId }, callback) => {
+    if (!code || playerId == null) return callback?.({ error: 'Missing code or playerId' });
+
+    const result = rooms.resumeSession(code, playerId, socket.id);
+    if (result.error) return callback?.({ error: result.error });
+
+    const room = result.room;
+    socket.data.playerId = playerId;
+    socket.data.roomCode = code;
+    socket.join(code);
+
+    // Tell everyone else this player is back online so lobby UI updates.
+    io.to(code).emit('player_reconnected', {
+      players: rooms.getPlayerList(room),
+    });
+
+    callback?.({
+      ok: true,
+      code,
+      playerId,
+      players: rooms.getPlayerList(room),
+      isHost: room.hostPlayerId === playerId,
+      gameState: buildGameState(room),
     });
   });
 
   socket.on('start_game', (_, callback) => {
-    const room = rooms.getRoomByPlayer(socket.id);
+    const room = getCallerRoom(socket, rooms);
     if (!room) return callback?.({ error: 'Not in a room' });
-    if (room.hostId !== socket.id) return callback?.({ error: 'Only the host can start' });
+    if (!isCallerHost(socket, room)) return callback?.({ error: 'Only the host can start' });
     if (room.players.size < 1) return callback?.({ error: 'Need at least 1 player' });
 
     room.state = 'playing';
     room.currentRound = 0;
     room.usedLocations = [];
     room.roundData = []; // collect per-round guess data for stats
-    for (const id of room.players.keys()) {
-      room.scores.set(id, 0);
+    for (const playerId of room.players.keys()) {
+      room.scores.set(playerId, 0);
     }
 
     startRound(io, room, rooms);
@@ -99,8 +149,8 @@ function handleSocket(io, socket, rooms, db) {
   });
 
   socket.on('location_found', ({ lat, lng, panoId }) => {
-    const room = rooms.getRoomByPlayer(socket.id);
-    if (!room || room.hostId !== socket.id) return;
+    const room = getCallerRoom(socket, rooms);
+    if (!room || !isCallerHost(socket, room)) return;
     if (room.state !== 'searching') return;
 
     room.currentLocation = { lat, lng, country: null };
@@ -128,14 +178,15 @@ function handleSocket(io, socket, rooms, db) {
   });
 
   socket.on('submit_guess', ({ lat, lng }) => {
-    const room = rooms.getRoomByPlayer(socket.id);
+    const room = getCallerRoom(socket, rooms);
     if (!room || room.state !== 'playing') return;
-    if (room.guesses.has(socket.id)) return;
+    const playerId = getCallerPlayerId(socket);
+    if (playerId == null) return;
+    if (room.guesses.has(playerId)) return;
 
-    room.guesses.set(socket.id, { lat, lng, time: Date.now() });
+    room.guesses.set(playerId, { lat, lng, time: Date.now() });
 
     io.to(room.code).emit('player_guessed', {
-      playerId: socket.id,
       totalGuesses: room.guesses.size,
       totalPlayers: room.players.size,
     });
@@ -147,9 +198,8 @@ function handleSocket(io, socket, rooms, db) {
   });
 
   socket.on('next_round', () => {
-    const room = rooms.getRoomByPlayer(socket.id);
-    if (!room) return;
-    if (room.hostId !== socket.id) return;
+    const room = getCallerRoom(socket, rooms);
+    if (!room || !isCallerHost(socket, room)) return;
     if (room.state !== 'round_results') return;
 
     if (room.currentRound >= room.totalRounds) {
@@ -160,16 +210,15 @@ function handleSocket(io, socket, rooms, db) {
   });
 
   socket.on('back_to_lobby', () => {
-    const room = rooms.getRoomByPlayer(socket.id);
-    if (!room) return;
-    if (room.hostId !== socket.id) return;
+    const room = getCallerRoom(socket, rooms);
+    if (!room || !isCallerHost(socket, room)) return;
 
     room.state = 'lobby';
     room.currentRound = 0;
     room.usedLocations = [];
     room.guesses.clear();
-    for (const id of room.players.keys()) {
-      room.scores.set(id, 0);
+    for (const playerId of room.players.keys()) {
+      room.scores.set(playerId, 0);
     }
 
     io.to(room.code).emit('back_to_lobby', {
@@ -179,16 +228,32 @@ function handleSocket(io, socket, rooms, db) {
 
   socket.on('disconnect', () => {
     console.log(`Disconnected: ${socket.id}`);
-    const result = rooms.removePlayer(socket.id);
-    if (!result) return;
 
-    const { room, wasHost, newHostId, roomDeleted } = result;
-    if (roomDeleted) return;
+    const marked = rooms.markDisconnected(socket.id);
+    if (!marked) return;
+    const { room, player } = marked;
 
-    io.to(room.code).emit('player_left', {
+    // Tell others the player is offline (for UI indicator) without evicting.
+    io.to(room.code).emit('player_disconnected', {
+      playerId: player.playerId,
       players: rooms.getPlayerList(room),
-      newHostId: wasHost ? newHostId : null,
     });
+
+    // Schedule eviction after the grace window.
+    player.graceTimer = setTimeout(() => {
+      // Only evict if they haven't reconnected.
+      if (player.connected) return;
+
+      const result = rooms.evictPlayer(room.code, player.playerId);
+      if (!result) return;
+      if (result.roomDeleted) return;
+
+      io.to(room.code).emit('player_left', {
+        players: rooms.getPlayerList(result.room),
+        newHostId: result.wasHost ? result.newHostSocketId : null,
+        newHostPlayerId: result.wasHost ? result.newHostPlayerId : null,
+      });
+    }, DISCONNECT_GRACE_MS);
   });
 }
 
@@ -207,9 +272,10 @@ function startRound(io, room, rooms) {
     totalRounds: room.totalRounds,
   });
 
-  const hostSocket = [...room.players.keys()].find(id => id === room.hostId);
-  if (hostSocket) {
-    io.to(hostSocket).emit('find_panorama', { candidates });
+  // Emit pano-search only to the host's current socket.
+  const hostPlayer = room.players.get(room.hostPlayerId);
+  if (hostPlayer?.connected && hostPlayer.socketId) {
+    io.to(hostPlayer.socketId).emit('find_panorama', { candidates });
   }
 }
 
@@ -223,31 +289,30 @@ function endRound(io, room, rooms) {
   const actual = room.currentLocation;
   const results = [];
 
-  for (const [socketId, player] of room.players) {
-    const guess = room.guesses.get(socketId);
+  for (const [playerId, player] of room.players) {
+    const guess = room.guesses.get(playerId);
     let distance = null;
     let points = 0;
 
     if (guess) {
       distance = haversine(actual.lat, actual.lng, guess.lat, guess.lng);
       points = calculateScore(distance);
-      room.scores.set(socketId, (room.scores.get(socketId) || 0) + points);
+      room.scores.set(playerId, (room.scores.get(playerId) || 0) + points);
     }
 
     const distRounded = distance !== null ? Math.round(distance) : null;
 
     results.push({
-      id: socketId,
+      id: player.socketId,
       playerId: player.playerId,
       name: player.name,
       avatarUrl: `https://api.dicebear.com/9.x/adventurer/svg?seed=${encodeURIComponent(player.name)}`,
       guess: guess ? { lat: guess.lat, lng: guess.lng } : null,
       distance: distRounded,
       points,
-      totalScore: room.scores.get(socketId) || 0,
+      totalScore: room.scores.get(playerId) || 0,
     });
 
-    // Collect round data for stats persistence
     if (room.roundData) {
       room.roundData.push({
         playerId: player.playerId,
@@ -280,10 +345,10 @@ function endGame(io, room, rooms, db) {
   const standings = [];
   const playerScores = [];
 
-  for (const [socketId, player] of room.players) {
-    const score = room.scores.get(socketId) || 0;
+  for (const [playerId, player] of room.players) {
+    const score = room.scores.get(playerId) || 0;
     standings.push({
-      id: socketId,
+      id: player.socketId,
       playerId: player.playerId,
       name: player.name,
       avatarUrl: `https://api.dicebear.com/9.x/adventurer/svg?seed=${encodeURIComponent(player.name)}`,
@@ -294,7 +359,6 @@ function endGame(io, room, rooms, db) {
 
   standings.sort((a, b) => b.totalScore - a.totalScore);
 
-  // Save to database (game scores + round guess data)
   try {
     db.saveFullGameResult(room.code, room.totalRounds, playerScores, room.roundData || []);
     console.log(`Game saved: ${room.code}, ${playerScores.length} players, ${(room.roundData || []).length} round guesses`);

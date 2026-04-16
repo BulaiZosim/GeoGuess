@@ -15,6 +15,20 @@ const state = {
   googleMapsReady: false,
 };
 
+// ===== RECONNECT BANNER =====
+function showReconnectBanner(text = 'Reconnecting…', isError = false) {
+  const el = document.getElementById('reconnect-banner');
+  const txt = document.getElementById('reconnect-banner-text');
+  if (!el || !txt) return;
+  txt.textContent = text;
+  el.classList.toggle('error', !!isError);
+  el.style.display = '';
+}
+function hideReconnectBanner() {
+  const el = document.getElementById('reconnect-banner');
+  if (el) el.style.display = 'none';
+}
+
 // ===== SCREENS =====
 function showScreen(id) {
   // Clear countdowns on any screen transition
@@ -125,7 +139,7 @@ async function loadActiveRooms() {
         state.socket.emit('join_room', { code: btn.dataset.code, playerId: state.selectedPlayerId }, (res) => {
           if (res.error) return showError(res.error);
           state.roomCode = res.code;
-          state.isHost = false;
+          state.isHost = !!res.isHost;
           if (res.gameState) {
             enterLobby(res);
             handleMidGameJoin(res.gameState);
@@ -154,17 +168,65 @@ function initSocket() {
   const socket = io();
   state.socket = socket;
   state.myId = null;
+  let hadConnection = false;
 
   socket.on('connect', () => {
+    const isReconnect = hadConnection;
+    hadConnection = true;
     state.myId = socket.id;
+
+    if (!isReconnect) return;
+
+    // Reconnect path: if we were in a room, try to resume the session.
+    if (state.roomCode && state.selectedPlayerId) {
+      showReconnectBanner('Reconnecting…');
+      socket.emit('resume_session', {
+        code: state.roomCode,
+        playerId: state.selectedPlayerId,
+      }, (res) => {
+        if (res?.error) {
+          // Room gone or grace expired — bail back to landing.
+          showReconnectBanner('Lost connection to the room', true);
+          setTimeout(hideReconnectBanner, 3000);
+          state.roomCode = null;
+          state.isHost = false;
+          showScreen('landing');
+          return;
+        }
+        state.isHost = !!res.isHost;
+        hideReconnectBanner();
+        renderLobbyPlayers(res.players);
+        updateHostControls();
+        if (res.gameState) handleMidGameJoin(res.gameState);
+      });
+    } else {
+      hideReconnectBanner();
+    }
+  });
+
+  socket.on('disconnect', () => {
+    // Only show the banner when we have a room to come back to; otherwise
+    // a landing-page disconnect is unobtrusive.
+    if (state.roomCode) showReconnectBanner('Reconnecting…');
   });
 
   socket.on('player_joined', ({ players }) => {
     renderLobbyPlayers(players);
   });
 
-  socket.on('player_left', ({ players, newHostId }) => {
-    if (newHostId === state.myId) {
+  socket.on('player_disconnected', ({ players }) => {
+    renderLobbyPlayers(players);
+  });
+
+  socket.on('player_reconnected', ({ players }) => {
+    renderLobbyPlayers(players);
+  });
+
+  socket.on('player_left', ({ players, newHostId, newHostPlayerId }) => {
+    // Prefer the persistent-id match so it survives our own socket.id changing.
+    if (newHostPlayerId != null && newHostPlayerId === state.selectedPlayerId) {
+      state.isHost = true;
+    } else if (newHostId && newHostId === state.myId) {
       state.isHost = true;
     }
     renderLobbyPlayers(players);
@@ -275,7 +337,7 @@ document.getElementById('btn-join').addEventListener('click', () => {
   state.socket.emit('join_room', { code, playerId: state.selectedPlayerId }, (res) => {
     if (res.error) return showError(res.error);
     state.roomCode = res.code;
-    state.isHost = false;
+    state.isHost = !!res.isHost;
 
     if (res.gameState) {
       // Joined mid-game — show waiting screen until next round
@@ -325,13 +387,17 @@ function enterLobby(res) {
 
 function renderLobbyPlayers(players) {
   const el = document.getElementById('lobby-players');
-  el.innerHTML = players.map(p => `
-    <div class="player-card ${p.isHost ? 'host' : ''}">
+  el.innerHTML = players.map(p => {
+    const classes = ['player-card'];
+    if (p.isHost) classes.push('host');
+    if (p.connected === false) classes.push('disconnected');
+    return `
+    <div class="${classes.join(' ')}">
       <img src="${p.avatarUrl}" class="player-avatar" alt="${escapeHtml(p.name)}" />
       <span class="player-name">${escapeHtml(p.name)}</span>
       ${p.isHost ? '<span class="host-badge">HOST</span>' : ''}
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 }
 
 function updateHostControls() {

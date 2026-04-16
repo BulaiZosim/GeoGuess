@@ -6,6 +6,15 @@ function avatarUrl(name) {
   return `https://api.dicebear.com/9.x/adventurer/svg?seed=${encodeURIComponent(name)}`;
 }
 
+// Room state is keyed by the persistent playerId (from the DB), not by socket.id.
+// This lets a player reconnect with a fresh socket and resume their slot.
+//
+// Each player entry: { socketId, playerId, name, connected, graceTimer }
+//   socketId     — the CURRENT socket id (changes on reconnect)
+//   connected    — true while the websocket is live; false during grace period
+//   graceTimer   — Node timeout id; if it fires, the player is fully evicted
+//
+// hostPlayerId points at the persistent id of the host.
 class RoomManager {
   constructor() {
     this.rooms = new Map();
@@ -22,11 +31,11 @@ class RoomManager {
     return code;
   }
 
-  createRoom(hostSocketId, playerName, persistentPlayerId) {
+  createRoom(socketId, playerName, playerId) {
     const code = this.generateCode();
     const room = {
       code,
-      hostId: hostSocketId,
+      hostPlayerId: playerId,
       players: new Map(),
       state: 'lobby',
       currentRound: 0,
@@ -38,13 +47,14 @@ class RoomManager {
       scores: new Map(),
       roundTimer: null,
     };
-    room.players.set(hostSocketId, {
-      id: hostSocketId,
+    room.players.set(playerId, {
+      socketId,
+      playerId,
       name: playerName,
-      playerId: persistentPlayerId,
       connected: true,
+      graceTimer: null,
     });
-    room.scores.set(hostSocketId, 0);
+    room.scores.set(playerId, 0);
     this.rooms.set(code, room);
     return room;
   }
@@ -53,56 +63,105 @@ class RoomManager {
     return this.rooms.get(code?.toUpperCase());
   }
 
-  joinRoom(code, socketId, playerName, persistentPlayerId) {
+  joinRoom(code, socketId, playerName, playerId) {
     const room = this.getRoom(code);
     if (!room) return { error: 'Room not found' };
     if (room.state === 'game_over') return { error: 'Game is over, wait for host to return to lobby' };
-    if (room.players.size >= MAX_PLAYERS) return { error: 'Room is full (max 24 players)' };
 
-    // Check if this persistent player is already in the room
-    for (const p of room.players.values()) {
-      if (p.playerId === persistentPlayerId) {
-        return { error: 'You are already in this room' };
-      }
+    const existing = room.players.get(playerId);
+    if (existing) {
+      if (existing.connected) return { error: 'You are already in this room' };
+      // Disconnected slot: treat this as a resume. Cancel grace, rebind socket.
+      this._cancelGrace(existing);
+      existing.socketId = socketId;
+      existing.connected = true;
+      return { room, resumed: true };
     }
 
-    room.players.set(socketId, {
-      id: socketId,
+    if (room.players.size >= MAX_PLAYERS) return { error: 'Room is full (max 24 players)' };
+
+    room.players.set(playerId, {
+      socketId,
+      playerId,
       name: playerName,
-      playerId: persistentPlayerId,
       connected: true,
+      graceTimer: null,
     });
-    room.scores.set(socketId, 0);
+    room.scores.set(playerId, 0);
     return { room };
   }
 
-  removePlayer(socketId) {
-    for (const [code, room] of this.rooms) {
-      if (room.players.has(socketId)) {
-        room.players.delete(socketId);
-        room.scores.delete(socketId);
-        room.guesses.delete(socketId);
-
-        if (room.players.size === 0) {
-          if (room.roundTimer) clearTimeout(room.roundTimer);
-          this.rooms.delete(code);
-          return { room, wasHost: room.hostId === socketId, roomDeleted: true };
+  // Mark a player as disconnected but DO NOT remove them yet.
+  // Returns the room + player entry so the caller can schedule a grace timer.
+  markDisconnected(socketId) {
+    for (const room of this.rooms.values()) {
+      for (const player of room.players.values()) {
+        if (player.socketId === socketId && player.connected) {
+          player.connected = false;
+          return { room, player };
         }
-
-        if (room.hostId === socketId) {
-          room.hostId = room.players.keys().next().value;
-          return { room, wasHost: true, newHostId: room.hostId, roomDeleted: false };
-        }
-
-        return { room, wasHost: false, roomDeleted: false };
       }
     }
     return null;
   }
 
-  getRoomByPlayer(socketId) {
+  // Called when a reconnecting client identifies itself with playerId + roomCode.
+  // Rebinds the new socketId to the existing player entry.
+  resumeSession(code, playerId, newSocketId) {
+    const room = this.getRoom(code);
+    if (!room) return { error: 'Room not found' };
+    const player = room.players.get(playerId);
+    if (!player) return { error: 'Player not in room' };
+    this._cancelGrace(player);
+    player.socketId = newSocketId;
+    player.connected = true;
+    return { room, player };
+  }
+
+  // Fully remove a player from the room. Transfers host if needed.
+  evictPlayer(code, playerId) {
+    const room = this.rooms.get(code);
+    if (!room) return null;
+    const player = room.players.get(playerId);
+    if (!player) return null;
+    this._cancelGrace(player);
+    room.players.delete(playerId);
+    room.scores.delete(playerId);
+    room.guesses.delete(playerId);
+    const wasHost = room.hostPlayerId === playerId;
+
+    if (room.players.size === 0) {
+      if (room.roundTimer) clearTimeout(room.roundTimer);
+      this.rooms.delete(code);
+      return { room, wasHost, roomDeleted: true };
+    }
+
+    if (wasHost) {
+      // Prefer a still-connected player as new host, fall back to any.
+      const newHost = [...room.players.values()].find(p => p.connected)
+                   || [...room.players.values()][0];
+      room.hostPlayerId = newHost.playerId;
+      return {
+        room, wasHost: true, roomDeleted: false,
+        newHostSocketId: newHost.socketId,
+        newHostPlayerId: newHost.playerId,
+      };
+    }
+
+    return { room, wasHost: false, roomDeleted: false };
+  }
+
+  _cancelGrace(player) {
+    if (player.graceTimer) {
+      clearTimeout(player.graceTimer);
+      player.graceTimer = null;
+    }
+  }
+
+  getRoomByPlayerId(playerId) {
+    if (playerId == null) return null;
     for (const room of this.rooms.values()) {
-      if (room.players.has(socketId)) return room;
+      if (room.players.has(playerId)) return room;
     }
     return null;
   }
@@ -127,18 +186,21 @@ class RoomManager {
 
   getPlayerList(room) {
     return [...room.players.values()].map(p => ({
-      id: p.id,
+      id: p.socketId,
       playerId: p.playerId,
       name: p.name,
       avatarUrl: avatarUrl(p.name),
-      isHost: p.id === room.hostId,
-      score: room.scores.get(p.id) || 0,
+      isHost: p.playerId === room.hostPlayerId,
+      connected: p.connected,
+      score: room.scores.get(p.playerId) || 0,
     }));
   }
 
   deleteRoom(code) {
     const room = this.rooms.get(code);
-    if (room?.roundTimer) clearTimeout(room.roundTimer);
+    if (!room) return;
+    if (room.roundTimer) clearTimeout(room.roundTimer);
+    for (const p of room.players.values()) this._cancelGrace(p);
     this.rooms.delete(code);
   }
 }
