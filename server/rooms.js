@@ -166,6 +166,17 @@ class RoomManager {
     return null;
   }
 
+  // Used to enforce the one-game-at-a-time rule. Kept tiny + synchronous so
+  // the create_room handler can check + createRoom atomically on Node's
+  // single-threaded event loop.
+  hasAnyRoom() {
+    return this.rooms.size > 0;
+  }
+
+  anyRoomCode() {
+    return this.rooms.keys().next().value || null;
+  }
+
   getActiveRooms() {
     const active = [];
     for (const room of this.rooms.values()) {

@@ -73,6 +73,17 @@ function handleSocket(io, socket, rooms, db) {
     const player = db.getPlayerById(playerId);
     if (!player) return callback({ error: 'Player not found' });
 
+    // Only one active game is allowed at a time. This check + createRoom
+    // below run synchronously inside the same handler — Node's event loop
+    // processes one message at a time, so two simultaneous create_room
+    // emits can't both observe "no rooms" and both succeed.
+    if (rooms.hasAnyRoom()) {
+      return callback({
+        error: 'A game is already running',
+        existingCode: rooms.anyRoomCode(),
+      });
+    }
+
     const room = rooms.createRoom(socket.id, player.name, player.id);
     socket.data.playerId = player.id;
     socket.data.roomCode = room.code;

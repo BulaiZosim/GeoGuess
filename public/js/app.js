@@ -13,7 +13,21 @@ const state = {
   timerInterval: null,
   countdownInterval: null,
   googleMapsReady: false,
+  activeRoomsCount: 0,
 };
+
+// Keep the Create button in sync with both "player selected" and "no active
+// game exists" — only one game is allowed at a time.
+function updateCreateButtonState() {
+  const btn = document.getElementById('btn-create');
+  if (state.activeRoomsCount > 0) {
+    btn.disabled = true;
+    btn.textContent = 'A game is already running';
+  } else {
+    btn.disabled = !state.selectedPlayerId;
+    btn.textContent = 'Create Game';
+  }
+}
 
 // ===== RECONNECT BANNER =====
 function showReconnectBanner(text = 'Reconnecting…', isError = false) {
@@ -83,7 +97,7 @@ async function loadPlayerGrid() {
         state.selectedPlayerId = clickedId;
         state.selectedPlayerName = card.dataset.playerName;
 
-        document.getElementById('btn-create').disabled = false;
+        updateCreateButtonState();
         document.getElementById('btn-join').disabled = false;
         document.querySelectorAll('.btn-join-room').forEach(b => b.disabled = false);
 
@@ -102,6 +116,9 @@ loadPlayerGrid();
 async function loadActiveRooms() {
   try {
     const rooms = await fetch('/api/rooms').then(r => r.json());
+    state.activeRoomsCount = rooms.length;
+    updateCreateButtonState();
+
     const section = document.getElementById('active-rooms-section');
     const container = document.getElementById('active-rooms');
 
