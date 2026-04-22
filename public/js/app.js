@@ -491,9 +491,10 @@ function initGuessMap() {
     worldCopyJump: true,
   });
 
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap',
-    maxZoom: 19,
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap &copy; CARTO',
+    subdomains: 'abcd',
+    maxZoom: 20,
   }).addTo(state.guessMap);
 
   let submitted = false;
@@ -544,9 +545,10 @@ function showRoundResults({ round, totalRounds, actual, results, isLastRound }) 
   mapContainer.appendChild(mapDiv);
 
   const rMap = L.map(mapDiv, { worldCopyJump: true });
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap',
-    maxZoom: 19,
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap &copy; CARTO',
+    subdomains: 'abcd',
+    maxZoom: 20,
   }).addTo(rMap);
 
   const actualIcon = L.divIcon({ className: 'marker-actual', html: '<div class="marker-dot actual"></div>', iconSize: [16, 16], iconAnchor: [8, 8] });
